@@ -13,9 +13,9 @@ API_BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 SEARCH_KEYWORD = 'fitzpatrick'
 COUNTRY_TO_ISOLATE = "United States"
 
-RAW_JSON_FILENAME = "fitzpatrick_usa_search.json"
-FINAL_OUTPUT_CSV = "usa_fitzpatrick_trials_dataset.csv"
-MAP_OUTPUT_HTML = "fitzpatrick_studies_map.html"
+RAW_JSON_FILENAME = "usa_map/fitzpatrick_usa_search.json"
+FINAL_OUTPUT_CSV = "usa_map/usa_fitzpatrick_trials_dataset.csv"
+MAP_OUTPUT_HTML = "usa_map/fitzpatrick_studies_map.html"
 
 # --- Filter Configuration ---
 FILTERS = {
@@ -93,7 +93,7 @@ def extract_and_standardize_scores(sentence):
     if not isinstance(sentence, str): return {}
     text = sentence.lower()
     result = {'extracted_score': 'Not Specified', 'Type_I': 0, 'Type_II': 0, 'Type_III': 0, 'Type_IV': 0, 'Type_V': 0, 'Type_VI': 0}
-    if any(word in text for word in ['wrinkle', 'severity', 'questionnaire']):
+    if any(word in text for word in ['wrinkle']):
         result['extracted_score'] = 'Not a Skin Type Score'
         return result
     if 'all' in text or 'any' in text:
@@ -103,16 +103,21 @@ def extract_and_standardize_scores(sentence):
 
     roman_map = {'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5, 'VI': 6}
     to_roman_map = {v: k for k, v in roman_map.items()}
-    def _to_int(s): return int(s) if s.isdigit() else roman_map.get(s.upper())
+    
+    def _to_int(s):
+        s_upper = s.upper()
+        if s_upper == 'L':
+            return 1
+        return int(s) if s.isdigit() else roman_map.get(s_upper)
 
-    valid_numeral_pattern = r'\b(vi|v|iv|iii|ii|i|[1-6])\b'
+    valid_numeral_pattern = r'\b(vi|v|iv|iii|ii|i|l|[1-6])\b'
     range_pattern = f'{valid_numeral_pattern}\\s*(?:-|to|through)\\s*{valid_numeral_pattern}'
     range_match = re.search(range_pattern, text, re.IGNORECASE)
 
     if range_match:
         start_str, end_str = range_match.groups()
         start_num, end_num = _to_int(start_str), _to_int(end_str)
-        if start_num and end_num and start_num < end_num:
+        if start_num is not None and end_num is not None and start_num < end_num:
             for i in range(start_num, end_num + 1):
                 if i in to_roman_map: result[f"Type_{to_roman_map[i]}"] = 1
             result['extracted_score'] = f"{to_roman_map.get(start_num, '')}-{to_roman_map.get(end_num, '')}"
@@ -130,11 +135,17 @@ def extract_and_standardize_scores(sentence):
 
 
 def extract_study_details(study_record, country):
-    """Extracts status, US locations with coordinates, and race demographics."""
-    details = {'status': "N/A", 'us_facilities': []}
+    """Extracts status, enrollment, US locations with coordinates, and race demographics."""
+    details = {'status': "N/A", 'us_facilities': [], 'enrollment': 'N/A', 'enrollment_type': 'N/A', 'race_data': {}}
     protocol = study_record.get('protocolSection', {})
     if not protocol: return details
+    
     details['status'] = protocol.get('statusModule', {}).get('overallStatus', 'N/A')
+
+    enrollment_info = protocol.get('designModule', {}).get('enrollmentInfo')
+    if enrollment_info and 'count' in enrollment_info:
+        details['enrollment'] = enrollment_info['count']
+        details['enrollment_type'] = enrollment_info.get('type', 'N/A')
 
     for loc in protocol.get('contactsLocationsModule', {}).get('locations', []):
         if loc.get('country') == country and loc.get('geoPoint'):
@@ -144,6 +155,7 @@ def extract_study_details(study_record, country):
                 'latitude': loc.get('geoPoint', {}).get('lat'), 'longitude': loc.get('geoPoint', {}).get('lon')
             })
 
+    # Extract race demographics ONCE per study (not per facility)
     results_section = study_record.get('resultsSection', {})
     if results_section:
         for measure in results_section.get('baselineCharacteristicsModule', {}).get('measures', []):
@@ -152,12 +164,11 @@ def extract_study_details(study_record, country):
                     race_title = cat.get('title')
                     if race_title:
                         total_count = sum(int(m.get('value', 0)) for m in cat.get('measurements', []))
-                        details[f"Race_{race_title.replace(' ', '_')}"] = total_count
+                        details['race_data'][f"Race_{race_title.replace(' ', '_')}"] = total_count
     return details
-
-
 def create_interactive_map_with_sidebar(map_data, filename):
-    """Creates an interactive Folium map with a custom sidebar interface."""
+    """Creates an interactive Folium map with a custom sidebar interface,
+    using single-color, dynamically-sized markers."""
     if not map_data:
         print("[!] No data available to create a map.")
         return
@@ -175,6 +186,28 @@ def create_interactive_map_with_sidebar(map_data, filename):
             locations_data[key].append(record)
 
     all_race_columns = sorted([col for col in map_data[0].keys() if col.startswith('Race_')]) if map_data else []
+    
+    enrollment_values = [r.get('enrollment') for r in map_data if isinstance(r.get('enrollment'), (int, float)) and r.get('enrollment') > 0]
+    max_enrollment = max(enrollment_values) if enrollment_values else 1000
+    
+    all_statuses = sorted(set(r.get('status', 'N/A') for r in map_data))
+    status_display_map = {
+        'ACTIVE_NOT_RECRUITING': 'Active, not recruiting',
+        'COMPLETED': 'Completed',
+        'ENROLLING_BY_INVITATION': 'Enrolling by invitation',
+        'NOT_YET_RECRUITING': 'Not yet recruiting',
+        'RECRUITING': 'Recruiting',
+        'SUSPENDED': 'Suspended',
+        'TERMINATED': 'Terminated',
+        'WITHDRAWN': 'Withdrawn',
+        'AVAILABLE': 'Available',
+        'NO_LONGER_AVAILABLE': 'No longer available',
+        'TEMPORARILY_NOT_AVAILABLE': 'Temporarily not available',
+        'APPROVED_FOR_MARKETING': 'Approved for marketing',
+        'WITHHELD': 'Withheld',
+        'UNKNOWN': 'Unknown status',
+        'N/A': 'N/A'
+    }
     
     total_studies = len(set(record['nctId'] for record in map_data))
     total_locations = len(locations_data)
@@ -233,6 +266,23 @@ def create_interactive_map_with_sidebar(map_data, filename):
             color: white; border: none; border-radius: 6px; cursor: pointer; 
             font-size: 14px; margin-top: 10px; 
         }
+        .checkbox-group {
+            display: flex; flex-direction: column; gap: 8px; margin-top: 10px;
+        }
+        .checkbox-item {
+            display: flex; align-items: center; cursor: pointer;
+            padding: 6px 8px; border-radius: 4px; background: rgba(0,0,0,0.2);
+            transition: background 0.2s;
+        }
+        .checkbox-item:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        .checkbox-item input[type="checkbox"] {
+            margin-right: 8px; cursor: pointer;
+        }
+        .checkbox-item label {
+            cursor: pointer; font-size: 13px; flex: 1;
+        }
         .folium-map { 
             position: absolute; top: 0; left: 320px; right: 0; bottom: 0; z-index: 1000; 
         }
@@ -263,9 +313,17 @@ def create_interactive_map_with_sidebar(map_data, filename):
         for race_col, data in race_data.items()
     ])
 
+    status_checkboxes = ''.join([
+        f'<div class="checkbox-item">'
+        f'<input type="checkbox" id="status-{status.lower()}" checked onchange="updateFilters()">'
+        f'<label for="status-{status.lower()}">{status_display_map.get(status, status)}</label>'
+        f'</div>'
+        for status in all_statuses
+    ])
+
     sidebar_html = f"""
     <div class="sidebar">
-        <h2>Clinical Trials Filter</h2>
+        <h2>US Fitzpatrick Trials</h2>
         <div class="filter-summary">
             <div>
                 <strong>Studies:</strong> 
@@ -278,11 +336,34 @@ def create_interactive_map_with_sidebar(map_data, filename):
         </div>
         <div class="filter-section"><h3>Fitzpatrick Skin Types</h3>{skin_type_html}</div>
         <div class="filter-section">
-            <h3>Population Size</h3>
+            <h3>Enrollment</h3>
             <div class="control-group">
-                <label for="min-population">Minimum Total Participants:</label>
-                <input type="range" id="min-population" class="slider" min="0" max="1000" value="0" oninput="updateFilters()">
-                <div class="slider-value" id="min-pop-value">0+</div>
+                <label for="min-enrollment">Minimum Enrollment:</label>
+                <input type="range" id="min-enrollment" class="slider" min="0" max="{max_enrollment}" value="0" oninput="updateFilters()">
+                <div class="slider-value" id="min-enrollment-value">0+</div>
+            </div>
+            <div class="control-group" style="margin-top: 15px;">
+                <label style="display: block; margin-bottom: 8px;">Enrollment Type:</label>
+                <div class="checkbox-group">
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="enrollment-actual" checked onchange="updateFilters()">
+                        <label for="enrollment-actual">Actual</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="enrollment-estimated" checked onchange="updateFilters()">
+                        <label for="enrollment-estimated">Estimated</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="enrollment-na" checked onchange="updateFilters()">
+                        <label for="enrollment-na">N/A</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="filter-section">
+            <h3>Study Status</h3>
+            <div class="checkbox-group">
+                {status_checkboxes}
             </div>
         </div>
         <div class="filter-section"><h3>Race Demographics</h3>{race_filter_html}</div>
@@ -294,14 +375,16 @@ def create_interactive_map_with_sidebar(map_data, filename):
     
     javascript_code = f"""
         let mapInstance;
-        let skinTypeLayers = {{}};
+        let markersLayer = L.layerGroup();
         
         const locationsData = {json.dumps(locations_data)};
         const allRaceColumns = {json.dumps(all_race_columns)};
-        const typeColors = {json.dumps(type_colors)};
         const raceDataInfo = {json.dumps(race_data)};
         const totalStudies = {total_studies};
         const totalLocations = {total_locations};
+        const maxEnrollment = {max_enrollment};
+        const allStatuses = {json.dumps(all_statuses)};
+        const statusDisplayMap = {json.dumps(status_display_map)};
 
         function findMapInstance() {{
             const mapId = document.querySelector('.folium-map').id;
@@ -321,12 +404,7 @@ def create_interactive_map_with_sidebar(map_data, filename):
             }}
             
             console.log("Map instance found:", mapInstance);
-
-            Object.keys(typeColors).forEach(skinType => {{
-                skinTypeLayers[skinType] = L.layerGroup().addTo(mapInstance);
-            }});
-
-            console.log("Skin type layers created:", Object.keys(skinTypeLayers));
+            markersLayer.addTo(mapInstance);
             updateFilters();
         }}
         
@@ -335,7 +413,7 @@ def create_interactive_map_with_sidebar(map_data, filename):
             updateFilters();
         }}
 
-        function passesFilters(record, popFilter, raceFilters, activeTypes) {{
+        function passesFilters(record, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes) {{
             let hasActiveSkinType = false;
             for (const type of activeTypes) {{
                 if (record[`Type_${{type}}`] === 1) {{
@@ -345,11 +423,14 @@ def create_interactive_map_with_sidebar(map_data, filename):
             }}
             if (!hasActiveSkinType) return false;
 
-            let totalParticipants = 0;
-            for (const raceCol of allRaceColumns) {{
-                totalParticipants += record[raceCol] || 0;
-            }}
-            if (totalParticipants < popFilter) return false;
+            const enrollment = record.enrollment === 'N/A' ? 0 : record.enrollment;
+            if (enrollment < enrollmentFilter) return false;
+
+            const enrollmentType = record.enrollment_type || 'N/A';
+            if (!enrollmentTypes.includes(enrollmentType.toUpperCase())) return false;
+
+            const status = record.status || 'N/A';
+            if (!statusTypes.includes(status)) return false;
 
             for (const [raceCol, minVal] of Object.entries(raceFilters)) {{
                 if ((record[raceCol] || 0) < minVal) return false;
@@ -358,16 +439,25 @@ def create_interactive_map_with_sidebar(map_data, filename):
         }}
 
         window.updateFilters = function() {{
-            if (!mapInstance || Object.keys(skinTypeLayers).length === 0) {{
-                console.warn('Map or layers not ready for update.');
+            if (!mapInstance) {{
+                console.warn('Map not ready for update.');
                 return;
             }}
 
             const activeTypes = Array.from(document.querySelectorAll('.skin-type-item.active')).map(el => el.dataset.type);
-            
-            const popFilter = parseInt(document.getElementById('min-population').value);
-            document.getElementById('min-pop-value').textContent = popFilter + '+';
-
+            const enrollmentFilter = parseInt(document.getElementById('min-enrollment').value);
+            document.getElementById('min-enrollment-value').textContent = enrollmentFilter + '+';
+            const enrollmentTypes = [];
+            if (document.getElementById('enrollment-actual').checked) enrollmentTypes.push('ACTUAL');
+            if (document.getElementById('enrollment-estimated').checked) enrollmentTypes.push('ESTIMATED');
+            if (document.getElementById('enrollment-na').checked) enrollmentTypes.push('N/A');
+            const statusTypes = [];
+            allStatuses.forEach(status => {{
+                const checkbox = document.getElementById(`status-${{status.toLowerCase()}}`);
+                if (checkbox && checkbox.checked) {{
+                    statusTypes.push(status);
+                }}
+            }});
             const raceFilters = {{}};
             for (const raceCol in raceDataInfo) {{
                 const elId = raceCol.toLowerCase();
@@ -379,14 +469,13 @@ def create_interactive_map_with_sidebar(map_data, filename):
                 }}
             }}
 
-            Object.values(skinTypeLayers).forEach(layer => layer.clearLayers());
-
+            markersLayer.clearLayers();
             let visibleLocations = 0;
             const visibleStudies = new Set();
 
             for (const [locKey, studiesAtLoc] of Object.entries(locationsData)) {{
                 const passingStudies = studiesAtLoc.filter(study => 
-                    passesFilters(study, popFilter, raceFilters, activeTypes)
+                    passesFilters(study, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes)
                 );
 
                 if (passingStudies.length > 0) {{
@@ -404,25 +493,44 @@ def create_interactive_map_with_sidebar(map_data, filename):
                         }});
                         if (raceHtml) raceHtml = `<p style="margin:5px 0 3px;"><strong>Demographics:</strong></p><ul style="margin:0;padding-left:20px;">${{raceHtml}}</ul>`;
                         
-                        popupHtml += `<div style="border-top: ${{i > 0 ? '1px solid #ccc' : 'none'}}; padding: 10px 5px;"><h4 style="margin:0 0 10px 0;">Study Details</h4><p><strong>NCT ID:</strong> <a href="https://clinicaltrials.gov/study/${{study.nctId}}" target="_blank">${{study.nctId}}</a></p><p><strong>Facility:</strong> ${{study.facility}}</p><p><strong>Skin Types:</strong> ${{study.extracted_score}}</p><p><strong>Total Participants:</strong> <strong>${{totalParticipants}}</strong></p>${{raceHtml}}</div>`;
+                        const enrollmentDisplay = study.enrollment !== 'N/A' && study.enrollment_type !== 'N/A' 
+                            ? `${{study.enrollment}} (${{study.enrollment_type}})`
+                            : (study.enrollment || 'N/A');
+                        const statusDisplay = statusDisplayMap[study.status] || study.status;
+
+                        const includedSkinTypes = [];
+                        const typeRomans = ['I', 'II', 'III', 'IV', 'V', 'VI'];
+                        typeRomans.forEach(roman => {{
+                            if (study[`Type_${{roman}}`] === 1) {{
+                                includedSkinTypes.push(roman);
+                            }}
+                        }});
+                        const skinTypeDisplay = includedSkinTypes.length > 0 ? includedSkinTypes.join(', ') : 'Not Specified';
+
+                        popupHtml += `<div style="border-top: ${{i > 0 ? '1px solid #ccc' : 'none'}}; padding: 10px 5px;">
+                                        <h4 style="margin:0 0 10px 0;">Study Details</h4>
+                                        <p><strong>NCT ID:</strong> <a href="https://clinicaltrials.gov/study/${{study.nctId}}" target="_blank">${{study.nctId}}</a></p>
+                                        <p><strong>Status:</strong> ${{statusDisplay}}</p>
+                                        <p><strong>Enrollment:</strong> <strong>${{enrollmentDisplay}}</strong></p>
+                                        <p><strong>Facility:</strong> ${{study.facility}}</p>
+                                        <p><strong>Skin Types:</strong> ${{skinTypeDisplay}}</p>
+                                        ${{raceHtml}}
+                                     </div>`;
                     }});
                     popupHtml += '</div>';
-
-                    const locationSkinTypes = new Set();
-                    passingStudies.forEach(study => {{
-                        for (const roman in typeColors) {{ if (study[`Type_${{roman}}`] === 1) locationSkinTypes.add(roman); }}
-                    }});
                     
-                    locationSkinTypes.forEach(roman => {{
-                        if (activeTypes.includes(roman) && skinTypeLayers[roman]) {{
-                            L.circleMarker([lat, lon], {{
-                                radius: 8, color: '#ffffff', weight: 2,
-                                fillColor: typeColors[roman], fillOpacity: 0.8
-                            }}).bindPopup(popupHtml, {{maxWidth: 400}})
-                              .bindTooltip(`${{passingStudies[0].facility}} (${{passingStudies.length}} studies)`)
-                              .addTo(skinTypeLayers[roman]);
-                        }}
-                    }});
+                    const markerRadius = 6 + Math.sqrt(passingStudies.length);
+                    
+                    L.circleMarker([lat, lon], {{
+                        radius: markerRadius,
+                        color: '#ffffff',
+                        weight: 2,
+                        fillColor: '#764ba2',
+                        fillOpacity: 0.8
+                    }})
+                    .bindPopup(popupHtml, {{maxWidth: 400}})
+                    .bindTooltip(`${{passingStudies[0].city}} (${{passingStudies.length}} studies)`)
+                    .addTo(markersLayer);
                 }}
             }}
             document.getElementById('visible-locations-count').textContent = visibleLocations;
@@ -432,6 +540,13 @@ def create_interactive_map_with_sidebar(map_data, filename):
         window.resetAllFilters = function() {{
             document.querySelectorAll('.skin-type-item').forEach(item => item.classList.add('active'));
             document.querySelectorAll('.slider').forEach(slider => slider.value = 0);
+            document.getElementById('enrollment-actual').checked = true;
+            document.getElementById('enrollment-estimated').checked = true;
+            document.getElementById('enrollment-na').checked = true;
+            allStatuses.forEach(status => {{
+                const checkbox = document.getElementById(`status-${{status.toLowerCase()}}`);
+                if (checkbox) checkbox.checked = true;
+            }});
             updateFilters();
         }};
     """
@@ -442,7 +557,6 @@ def create_interactive_map_with_sidebar(map_data, filename):
 
     m.save(filename)
     print(f"\n[*] Success! Interactive map saved to '{filename}'.")
-
 
 def main():
     """Main function to run the entire data processing and mapping pipeline."""
@@ -463,22 +577,20 @@ def main():
         details = extract_study_details(study, COUNTRY_TO_ISOLATE)
         if not details['us_facilities']: continue
         
-        for key in details:
-            if key.startswith('Race_'): all_race_keys.add(key)
+        for key in details['race_data']:
+            all_race_keys.add(key)
         
         inclusion_sentences = [s['sentence'] for s in parse_eligibility_criteria(study, SEARCH_KEYWORD) if not s['is_exclusion']]
         if not inclusion_sentences: continue
         
-        # For simplicity, we process the first relevant inclusion sentence found
         score_data = extract_and_standardize_scores(inclusion_sentences[0])
         if score_data['extracted_score'] == 'Not a Skin Type Score': continue
             
         for facility in details['us_facilities']:
-            row = {'nctId': nct_id, 'status': details['status']}
+            row = {'nctId': nct_id, 'status': details['status'], 'enrollment': details['enrollment'], 'enrollment_type': details['enrollment_type']}
             row.update(score_data)
             row.update(facility)
-            for k in details:
-                if k.startswith('Race_'): row[k] = details.get(k, 0)
+            row.update(details['race_data'])
             all_facility_rows.append(row)
     
     if not all_facility_rows:
@@ -488,39 +600,38 @@ def main():
     df = pd.DataFrame(all_facility_rows)
     for race_col in all_race_keys:
         if race_col not in df.columns: df[race_col] = 0
+    df['enrollment'] = df['enrollment'].replace(0, 'N/A')
+    df.fillna({'enrollment': 'N/A'}, inplace=True)
     df.fillna(0, inplace=True)
 
     print(f"[*] Processed data into {len(df)} facility-level records.")
 
-    # --- ADDED SECTION: IDENTIFY AND EXPORT UNPARSED STUDIES ---
     print("\n[*] Identifying studies that passed initial parsing but have no specific score assigned...")
     skin_type_cols = [f'Type_{r}' for r in ['I', 'II', 'III', 'IV', 'V', 'VI']]
-    
-    # Ensure all skin type columns exist in the DataFrame before summing
     existing_skin_type_cols = [col for col in skin_type_cols if col in df.columns]
     
-    # Create a boolean mask for rows where the sum of all 'Type_' columns is 0
     unparsed_mask = df[existing_skin_type_cols].sum(axis=1) == 0
     unparsed_df = df[unparsed_mask]
 
     if not unparsed_df.empty:
-        # The number of unique studies might be different from the number of records
         num_unparsed_studies = unparsed_df['nctId'].nunique()
         print(f"✅ Found {len(unparsed_df)} records from {num_unparsed_studies} unique studies with no specific Fitzpatrick Type flags.")
-        print("   These studies are included in the total count but may not appear on the map by default.")
         
         output_cols = ['nctId', 'facility', 'city', 'state', 'extracted_score']
-        # Ensure all columns exist before trying to save
         final_output_cols = [col for col in output_cols if col in unparsed_df.columns]
         
-        unparsed_df[final_output_cols].to_csv('unparsed_studies.csv', index=False)
-        print(f"[*] This list has been saved to 'unparsed_studies.csv' for your review.\n")
+        unparsed_df[final_output_cols].to_csv('usa_map/unparsed_studies.csv', index=False)
+        print(f"[*] This list has been saved to 'unparsed_studies.csv' for your review.")
     else:
         print("[*] All processed studies have at least one specific Fitzpatrick Type flag assigned.")
-    # --- END OF ADDED SECTION ---
+    
+    if not unparsed_df.empty:
+        print(f"\n[*] Dropping {len(unparsed_df)} records with no specific scores from the main dataset.")
+        df = df[~unparsed_mask] # Invert the mask to keep only the rows WITH scores
+        print(f"[*] {len(df)} records remaining for the final CSV and map.")
 
     if df.empty:
-        print("[!] No records to process after parsing.")
+        print("[!] No records to process after parsing. All studies were unparsed.")
         return
 
     try:
@@ -530,6 +641,5 @@ def main():
         print(f"[!] Error writing final CSV file: {e}")
 
     create_interactive_map_with_sidebar(df.to_dict('records'), MAP_OUTPUT_HTML)
-
 if __name__ == "__main__":
     main()
