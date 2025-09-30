@@ -15,7 +15,7 @@ COUNTRY_TO_ISOLATE = "United States"
 
 RAW_JSON_FILENAME = "usa_map/fitzpatrick_usa_search.json"
 FINAL_OUTPUT_CSV = "usa_map/usa_fitzpatrick_trials_dataset.csv"
-MAP_OUTPUT_HTML = "usa_map/fitzpatrick_studies_map.html"
+MAP_OUTPUT_HTML = "index.html"
 
 # --- Filter Configuration ---
 FILTERS = {
