@@ -136,11 +136,24 @@ def extract_and_standardize_scores(sentence):
 
 def extract_study_details(study_record, country):
     """Extracts status, enrollment, US locations with coordinates, and race demographics."""
-    details = {'status': "N/A", 'us_facilities': [], 'enrollment': 'N/A', 'enrollment_type': 'N/A', 'race_data': {}}
+    details = {
+        'status': "N/A", 
+        'us_facilities': [], 
+        'enrollment': 'N/A', 
+        'enrollment_type': 'N/A', 
+        'race_data': {},
+        'last_update_year': 'N/A'
+    }
     protocol = study_record.get('protocolSection', {})
     if not protocol: return details
     
-    details['status'] = protocol.get('statusModule', {}).get('overallStatus', 'N/A')
+    status_module = protocol.get('statusModule', {})
+    details['status'] = status_module.get('overallStatus', 'N/A')
+    
+    post_date_struct = status_module.get('lastUpdatePostDateStruct', {})
+    last_update_date = post_date_struct.get('date')
+    if last_update_date and isinstance(last_update_date, str) and len(last_update_date) >= 4:
+        details['last_update_year'] = last_update_date[:4]
 
     enrollment_info = protocol.get('designModule', {}).get('enrollmentInfo')
     if enrollment_info and 'count' in enrollment_info:
@@ -155,7 +168,6 @@ def extract_study_details(study_record, country):
                 'latitude': loc.get('geoPoint', {}).get('lat'), 'longitude': loc.get('geoPoint', {}).get('lon')
             })
 
-    # Extract race demographics ONCE per study (not per facility)
     results_section = study_record.get('resultsSection', {})
     if results_section:
         for measure in results_section.get('baselineCharacteristicsModule', {}).get('measures', []):
@@ -166,6 +178,7 @@ def extract_study_details(study_record, country):
                         total_count = sum(int(m.get('value', 0)) for m in cat.get('measurements', []))
                         details['race_data'][f"Race_{race_title.replace(' ', '_')}"] = total_count
     return details
+
 def create_interactive_map_with_sidebar(map_data, filename):
     """Creates an interactive Folium map with a custom sidebar interface,
     using single-color, dynamically-sized markers."""
@@ -189,24 +202,18 @@ def create_interactive_map_with_sidebar(map_data, filename):
     
     enrollment_values = [r.get('enrollment') for r in map_data if isinstance(r.get('enrollment'), (int, float)) and r.get('enrollment') > 0]
     max_enrollment = max(enrollment_values) if enrollment_values else 1000
+
+    year_values = sorted([int(r['last_update_year']) for r in map_data if r.get('last_update_year', 'N/A').isdigit()])
+    min_year, max_year = (min(year_values), max(year_values)) if year_values else (2000, 2025)
     
     all_statuses = sorted(set(r.get('status', 'N/A') for r in map_data))
     status_display_map = {
-        'ACTIVE_NOT_RECRUITING': 'Active, not recruiting',
-        'COMPLETED': 'Completed',
-        'ENROLLING_BY_INVITATION': 'Enrolling by invitation',
-        'NOT_YET_RECRUITING': 'Not yet recruiting',
-        'RECRUITING': 'Recruiting',
-        'SUSPENDED': 'Suspended',
-        'TERMINATED': 'Terminated',
-        'WITHDRAWN': 'Withdrawn',
-        'AVAILABLE': 'Available',
-        'NO_LONGER_AVAILABLE': 'No longer available',
-        'TEMPORARILY_NOT_AVAILABLE': 'Temporarily not available',
-        'APPROVED_FOR_MARKETING': 'Approved for marketing',
-        'WITHHELD': 'Withheld',
-        'UNKNOWN': 'Unknown status',
-        'N/A': 'N/A'
+        'ACTIVE_NOT_RECRUITING': 'Active, not recruiting', 'COMPLETED': 'Completed',
+        'ENROLLING_BY_INVITATION': 'Enrolling by invitation', 'NOT_YET_RECRUITING': 'Not yet recruiting',
+        'RECRUITING': 'Recruiting', 'SUSPENDED': 'Suspended', 'TERMINATED': 'Terminated',
+        'WITHDRAWN': 'Withdrawn', 'AVAILABLE': 'Available', 'NO_LONGER_AVAILABLE': 'No longer available',
+        'TEMPORARILY_NOT_AVAILABLE': 'Temporarily not available', 'APPROVED_FOR_MARKETING': 'Approved for marketing',
+        'WITHHELD': 'Withheld', 'UNKNOWN': 'Unknown status', 'N/A': 'N/A'
     }
     
     total_studies = len(set(record['nctId'] for record in map_data))
@@ -217,166 +224,65 @@ def create_interactive_map_with_sidebar(map_data, filename):
         values = [r.get(col, 0) for r in map_data if isinstance(r.get(col), (int, float)) and r.get(col) > 0]
         if values: 
             race_data[col] = {
-                'min': 0, 
-                'max': max(values), 
-                'display_name': col.replace('Race_', '').replace('_', ' ')
+                'min': 0, 'max': max(values), 'display_name': col.replace('Race_', '').replace('_', ' ')
             }
     
     css_rules = """
         body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
-        .sidebar { 
-            position: fixed; top: 0; left: 0; width: 320px; height: 100vh; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-            color: white; padding: 20px; box-sizing: border-box; z-index: 1001; 
-            overflow-y: auto; box-shadow: 2px 0 10px rgba(0,0,0,0.2); 
-        }
-        .sidebar h2 { 
-            margin: 0 0 20px 0; font-size: 24px; font-weight: 300; 
-            border-bottom: 2px solid rgba(255,255,255,0.3); padding-bottom: 10px; 
-        }
-        .filter-section { 
-            margin-bottom: 20px; background: rgba(255,255,255,0.1); 
-            padding: 15px; border-radius: 8px; 
-        }
-        .skin-type-item { 
-            display: flex; align-items: center; margin: 8px 0; padding: 8px; 
-            border-radius: 6px; transition: background 0.3s; cursor: pointer; 
-            user-select: none; background: rgba(0,0,0,0.2); 
-        }
+        .sidebar { position: fixed; top: 0; left: 0; width: 320px; height: 100vh; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; box-sizing: border-box; z-index: 1001; overflow-y: auto; box-shadow: 2px 0 10px rgba(0,0,0,0.2); }
+        .sidebar h2 { margin: 0 0 20px 0; font-size: 24px; font-weight: 300; border-bottom: 2px solid rgba(255,255,255,0.3); padding-bottom: 10px; }
+        .filter-section { margin-bottom: 20px; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; }
+        .skin-type-item { display: flex; align-items: center; margin: 8px 0; padding: 8px; border-radius: 6px; transition: background 0.3s; cursor: pointer; user-select: none; background: rgba(0,0,0,0.2); }
         .skin-type-item.active { background: rgba(255,255,255,0.3); }
-        .color-indicator { 
-            width: 18px; height: 18px; border-radius: 50%; margin-right: 12px; 
-            border: 2px solid white; 
-        }
-        .slider { 
-            width: 100%; -webkit-appearance: none; appearance: none; 
-            height: 6px; border-radius: 3px; background: rgba(255,255,255,0.3); 
-            outline: none; 
-        }
-        .slider::-webkit-slider-thumb { 
-            -webkit-appearance: none; appearance: none; width: 18px; height: 18px; 
-            border-radius: 50%; background: #ffd700; cursor: pointer; 
-        }
-        .slider-value { 
-            font-size: 12px; color: #ffd700; text-align: center; 
-            margin-top: 5px; font-weight: bold; 
-        }
-        .reset-btn { 
-            width: 100%; padding: 10px; background: rgba(255,255,255,0.2); 
-            color: white; border: none; border-radius: 6px; cursor: pointer; 
-            font-size: 14px; margin-top: 10px; 
-        }
-        .checkbox-group {
-            display: flex; flex-direction: column; gap: 8px; margin-top: 10px;
-        }
-        .checkbox-item {
-            display: flex; align-items: center; cursor: pointer;
-            padding: 6px 8px; border-radius: 4px; background: rgba(0,0,0,0.2);
-            transition: background 0.2s;
-        }
-        .checkbox-item:hover {
-            background: rgba(255,255,255,0.1);
-        }
-        .checkbox-item input[type="checkbox"] {
-            margin-right: 8px; cursor: pointer;
-        }
-        .checkbox-item label {
-            cursor: pointer; font-size: 13px; flex: 1;
-        }
-        .folium-map { 
-            position: absolute; top: 0; left: 320px; right: 0; bottom: 0; z-index: 1000; 
-        }
+        .color-indicator { width: 18px; height: 18px; border-radius: 50%; margin-right: 12px; border: 2px solid white; }
+        .slider { width: 100%; -webkit-appearance: none; appearance: none; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.3); outline: none; }
+        .slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #ffd700; cursor: pointer; }
+        .slider-value { font-size: 12px; color: #ffd700; text-align: center; margin-top: 5px; font-weight: bold; }
+        .reset-btn { width: 100%; padding: 10px; background: rgba(255,255,255,0.2); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; margin-top: 10px; }
+        .checkbox-group { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+        .checkbox-item { display: flex; align-items: center; cursor: pointer; padding: 6px 8px; border-radius: 4px; background: rgba(0,0,0,0.2); transition: background 0.2s; }
+        .checkbox-item:hover { background: rgba(255,255,255,0.1); }
+        .checkbox-item input[type="checkbox"] { margin-right: 8px; cursor: pointer; }
+        .checkbox-item label { cursor: pointer; font-size: 13px; flex: 1; }
+        .folium-map { position: absolute; top: 0; left: 320px; right: 0; bottom: 0; z-index: 1000; }
         .leaflet-control-layers { display: none !important; }
-        .filter-summary { 
-            background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; 
-            margin-bottom: 15px; font-size: 13px; 
-        }
+        .filter-summary { background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; }
         .filter-summary div:not(:last-child) { margin-bottom: 4px; }
         .race-filter { margin-bottom: 10px; }
         .race-filter label { display: block; margin-bottom: 5px; font-size: 13px; }
     """
     
     type_colors = {'I': '#FFE5E5', 'II': '#FFB3B3', 'III': '#FF8080', 'IV': '#CC6600', 'V': '#8B4513', 'VI': '#654321'}
-    skin_type_html = ''.join([
-        f'<div class="skin-type-item active" data-type="{skin_type}" onclick="this.classList.toggle(\'active\'); updateFilters();">'
-        f'<div class="color-indicator" style="background-color: {color};"></div>'
-        f'<span>Type {skin_type}</span></div>'
-        for skin_type, color in type_colors.items()
-    ])
-
-    race_filter_html = ''.join([
-        f'<div class="race-filter">'
-        f'<label for="{race_col.lower()}">{data["display_name"]}:</label>'
-        f'<input type="range" id="{race_col.lower()}" class="slider" min="0" max="{data["max"]}" value="0" oninput="updateFilters()">'
-        f'<div class="slider-value" id="{race_col.lower()}-value">0+</div>'
-        f'</div>'
-        for race_col, data in race_data.items()
-    ])
-
-    status_checkboxes = ''.join([
-        f'<div class="checkbox-item">'
-        f'<input type="checkbox" id="status-{status.lower()}" checked onchange="updateFilters()">'
-        f'<label for="status-{status.lower()}">{status_display_map.get(status, status)}</label>'
-        f'</div>'
-        for status in all_statuses
-    ])
+    skin_type_html = ''.join([ f'<div class="skin-type-item active" data-type="{skin_type}" onclick="this.classList.toggle(\'active\'); updateFilters();"><div class="color-indicator" style="background-color: {color};"></div><span>Type {skin_type}</span></div>' for skin_type, color in type_colors.items() ])
+    race_filter_html = ''.join([ f'<div class="race-filter"><label for="{race_col.lower()}">{data["display_name"]}:</label><input type="range" id="{race_col.lower()}" class="slider" min="0" max="{data["max"]}" value="0" oninput="updateFilters()"><div class="slider-value" id="{race_col.lower()}-value">0+</div></div>' for race_col, data in race_data.items() ])
+    status_checkboxes = ''.join([ f'<div class="checkbox-item"><input type="checkbox" id="status-{status.lower()}" checked onchange="updateFilters()"><label for="status-{status.lower()}">{status_display_map.get(status, status)}</label></div>' for status in all_statuses ])
 
     sidebar_html = f"""
     <div class="sidebar">
         <h2>US Fitzpatrick Trials</h2>
         <div class="filter-summary">
-            <div>
-                <strong>Studies:</strong> 
-                <span id="visible-studies-count">{total_studies}</span> of {total_studies}
-            </div>
-            <div>
-                <strong>Locations:</strong> 
-                <span id="visible-locations-count">{total_locations}</span> of {total_locations}
-            </div>
+            <div><strong>Studies:</strong> <span id="visible-studies-count">{total_studies}</span> of {total_studies}</div>
+            <div><strong>Locations:</strong> <span id="visible-locations-count">{total_locations}</span> of {total_locations}</div>
         </div>
         <div class="filter-section"><h3>Fitzpatrick Skin Types</h3>{skin_type_html}</div>
         <div class="filter-section">
             <h3>Enrollment</h3>
-            <div class="control-group">
-                <label for="min-enrollment">Minimum Enrollment:</label>
-                <input type="range" id="min-enrollment" class="slider" min="0" max="{max_enrollment}" value="0" oninput="updateFilters()">
-                <div class="slider-value" id="min-enrollment-value">0+</div>
-            </div>
-            <div class="control-group" style="margin-top: 15px;">
-                <label style="display: block; margin-bottom: 8px;">Enrollment Type:</label>
-                <div class="checkbox-group">
-                    <div class="checkbox-item">
-                        <input type="checkbox" id="enrollment-actual" checked onchange="updateFilters()">
-                        <label for="enrollment-actual">Actual</label>
-                    </div>
-                    <div class="checkbox-item">
-                        <input type="checkbox" id="enrollment-estimated" checked onchange="updateFilters()">
-                        <label for="enrollment-estimated">Estimated</label>
-                    </div>
-                    <div class="checkbox-item">
-                        <input type="checkbox" id="enrollment-na" checked onchange="updateFilters()">
-                        <label for="enrollment-na">N/A</label>
-                    </div>
-                </div>
-            </div>
+            <div class="control-group"><label for="min-enrollment">Minimum Enrollment:</label><input type="range" id="min-enrollment" class="slider" min="0" max="{max_enrollment}" value="0" oninput="updateFilters()"><div class="slider-value" id="min-enrollment-value">0+</div></div>
+            <div class="control-group" style="margin-top: 15px;"><label style="display: block; margin-bottom: 8px;">Enrollment Type:</label><div class="checkbox-group"><div class="checkbox-item"><input type="checkbox" id="enrollment-actual" checked onchange="updateFilters()"><label for="enrollment-actual">Actual</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-estimated" checked onchange="updateFilters()"><label for="enrollment-estimated">Estimated</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-na" checked onchange="updateFilters()"><label for="enrollment-na">N/A</label></div></div></div>
         </div>
+        <div class="filter-section"><h3>Study Status</h3><div class="checkbox-group">{status_checkboxes}</div></div>
         <div class="filter-section">
-            <h3>Study Status</h3>
-            <div class="checkbox-group">
-                {status_checkboxes}
-            </div>
+            <h3>Last Updated Year</h3>
+            <div class="control-group"><label for="year-range">Minimum Year:</label><input type="range" id="year-range" class="slider" min="{min_year}" max="{max_year}" value="{min_year}" oninput="updateFilters()"><div class="slider-value" id="year-range-value">{min_year}+</div></div>
         </div>
         <div class="filter-section"><h3>Race Demographics</h3>{race_filter_html}</div>
         <div class="filter-section"><button class="reset-btn" onclick="resetAllFilters()">Reset All Filters</button></div>
     </div>
     """
-
-    map_name = m.get_name()
     
     javascript_code = f"""
         let mapInstance;
         let markersLayer = L.layerGroup();
-        
         const locationsData = {json.dumps(locations_data)};
         const allRaceColumns = {json.dumps(all_race_columns)};
         const raceDataInfo = {json.dumps(race_data)};
@@ -385,52 +291,34 @@ def create_interactive_map_with_sidebar(map_data, filename):
         const maxEnrollment = {max_enrollment};
         const allStatuses = {json.dumps(all_statuses)};
         const statusDisplayMap = {json.dumps(status_display_map)};
+        const minYear = {min_year};
+        const maxYear = {max_year};
 
-        function findMapInstance() {{
-            const mapId = document.querySelector('.folium-map').id;
-            return window[mapId];
-        }}
-
-        window.addEventListener('load', function() {{
-            setTimeout(initializeMap, 500);
-        }});
+        function findMapInstance() {{ return window[document.querySelector('.folium-map').id]; }}
+        window.addEventListener('load', function() {{ setTimeout(initializeMap, 500); }});
 
         function initializeMap() {{
             mapInstance = findMapInstance();
-            if (!mapInstance) {{
-                console.error("Map instance not found. Retrying...");
-                setTimeout(initializeMap, 500);
-                return;
-            }}
-            
+            if (!mapInstance) {{ console.error("Map instance not found. Retrying..."); setTimeout(initializeMap, 500); return; }}
             console.log("Map instance found:", mapInstance);
             markersLayer.addTo(mapInstance);
             updateFilters();
         }}
         
-        window.toggleSkinType = function(element) {{
-            element.classList.toggle('active');
-            updateFilters();
-        }}
+        window.toggleSkinType = function(element) {{ element.classList.toggle('active'); updateFilters(); }}
 
-        function passesFilters(record, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes) {{
-            let hasActiveSkinType = false;
-            for (const type of activeTypes) {{
-                if (record[`Type_${{type}}`] === 1) {{
-                    hasActiveSkinType = true;
-                    break;
-                }}
-            }}
+        function passesFilters(record, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter) {{
+            let hasActiveSkinType = activeTypes.some(type => record[`Type_${{type}}`] === 1);
             if (!hasActiveSkinType) return false;
+            
+            const recordYear = parseInt(record.last_update_year);
+            if (!isNaN(recordYear) && recordYear < yearFilter) return false;
 
             const enrollment = record.enrollment === 'N/A' ? 0 : record.enrollment;
             if (enrollment < enrollmentFilter) return false;
 
-            const enrollmentType = record.enrollment_type || 'N/A';
-            if (!enrollmentTypes.includes(enrollmentType.toUpperCase())) return false;
-
-            const status = record.status || 'N/A';
-            if (!statusTypes.includes(status)) return false;
+            if (!enrollmentTypes.includes((record.enrollment_type || 'N/A').toUpperCase())) return false;
+            if (!statusTypes.includes(record.status || 'N/A')) return false;
 
             for (const [raceCol, minVal] of Object.entries(raceFilters)) {{
                 if ((record[raceCol] || 0) < minVal) return false;
@@ -439,34 +327,23 @@ def create_interactive_map_with_sidebar(map_data, filename):
         }}
 
         window.updateFilters = function() {{
-            if (!mapInstance) {{
-                console.warn('Map not ready for update.');
-                return;
-            }}
+            if (!mapInstance) {{ console.warn('Map not ready for update.'); return; }}
 
             const activeTypes = Array.from(document.querySelectorAll('.skin-type-item.active')).map(el => el.dataset.type);
             const enrollmentFilter = parseInt(document.getElementById('min-enrollment').value);
             document.getElementById('min-enrollment-value').textContent = enrollmentFilter + '+';
+            const yearFilter = parseInt(document.getElementById('year-range').value);
+            document.getElementById('year-range-value').textContent = yearFilter + '+';
             const enrollmentTypes = [];
             if (document.getElementById('enrollment-actual').checked) enrollmentTypes.push('ACTUAL');
             if (document.getElementById('enrollment-estimated').checked) enrollmentTypes.push('ESTIMATED');
             if (document.getElementById('enrollment-na').checked) enrollmentTypes.push('N/A');
-            const statusTypes = [];
-            allStatuses.forEach(status => {{
-                const checkbox = document.getElementById(`status-${{status.toLowerCase()}}`);
-                if (checkbox && checkbox.checked) {{
-                    statusTypes.push(status);
-                }}
-            }});
+            const statusTypes = allStatuses.filter(status => document.getElementById(`status-${{status.toLowerCase()}}`)?.checked);
             const raceFilters = {{}};
             for (const raceCol in raceDataInfo) {{
                 const elId = raceCol.toLowerCase();
                 const element = document.getElementById(elId);
-                if (element) {{
-                    const minValue = parseInt(element.value);
-                    raceFilters[raceCol] = minValue;
-                    document.getElementById(elId + '-value').textContent = minValue + '+';
-                }}
+                if (element) {{ const minValue = parseInt(element.value); raceFilters[raceCol] = minValue; document.getElementById(elId + '-value').textContent = minValue + '+'; }}
             }}
 
             markersLayer.clearLayers();
@@ -474,63 +351,25 @@ def create_interactive_map_with_sidebar(map_data, filename):
             const visibleStudies = new Set();
 
             for (const [locKey, studiesAtLoc] of Object.entries(locationsData)) {{
-                const passingStudies = studiesAtLoc.filter(study => 
-                    passesFilters(study, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes)
-                );
-
+                const passingStudies = studiesAtLoc.filter(study => passesFilters(study, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter));
                 if (passingStudies.length > 0) {{
                     visibleLocations++;
                     passingStudies.forEach(study => visibleStudies.add(study.nctId));
-                    
                     const [lat, lon] = locKey.split(',').map(Number);
-                    
                     let popupHtml = '<div style="font-family: Arial, sans-serif; max-height: 300px; overflow-y: auto; min-width: 350px;">';
                     passingStudies.forEach((study, i) => {{
-                        let raceHtml = "", totalParticipants = 0;
-                        allRaceColumns.forEach(raceCol => {{
-                            const count = study[raceCol] || 0;
-                            if (count > 0) {{ totalParticipants += count; raceHtml += `<li>${{raceDataInfo[raceCol]?.display_name || raceCol}}: <strong>${{count}}</strong></li>`; }}
-                        }});
+                        let raceHtml = "";
+                        allRaceColumns.forEach(raceCol => {{ const count = study[raceCol] || 0; if (count > 0) raceHtml += `<li>${{raceDataInfo[raceCol]?.display_name || raceCol}}: <strong>${{count}}</strong></li>`; }});
                         if (raceHtml) raceHtml = `<p style="margin:5px 0 3px;"><strong>Demographics:</strong></p><ul style="margin:0;padding-left:20px;">${{raceHtml}}</ul>`;
-                        
-                        const enrollmentDisplay = study.enrollment !== 'N/A' && study.enrollment_type !== 'N/A' 
-                            ? `${{study.enrollment}} (${{study.enrollment_type}})`
-                            : (study.enrollment || 'N/A');
+                        const enrollmentDisplay = study.enrollment !== 'N/A' && study.enrollment_type !== 'N/A' ? `${{study.enrollment}} (${{study.enrollment_type}})` : (study.enrollment || 'N/A');
                         const statusDisplay = statusDisplayMap[study.status] || study.status;
-
-                        const includedSkinTypes = [];
-                        const typeRomans = ['I', 'II', 'III', 'IV', 'V', 'VI'];
-                        typeRomans.forEach(roman => {{
-                            if (study[`Type_${{roman}}`] === 1) {{
-                                includedSkinTypes.push(roman);
-                            }}
-                        }});
+                        const includedSkinTypes = ['I', 'II', 'III', 'IV', 'V', 'VI'].filter(roman => study[`Type_${{roman}}`] === 1);
                         const skinTypeDisplay = includedSkinTypes.length > 0 ? includedSkinTypes.join(', ') : 'Not Specified';
-
-                        popupHtml += `<div style="border-top: ${{i > 0 ? '1px solid #ccc' : 'none'}}; padding: 10px 5px;">
-                                        <h4 style="margin:0 0 10px 0;">Study Details</h4>
-                                        <p><strong>NCT ID:</strong> <a href="https://clinicaltrials.gov/study/${{study.nctId}}" target="_blank">${{study.nctId}}</a></p>
-                                        <p><strong>Status:</strong> ${{statusDisplay}}</p>
-                                        <p><strong>Enrollment:</strong> <strong>${{enrollmentDisplay}}</strong></p>
-                                        <p><strong>Facility:</strong> ${{study.facility}}</p>
-                                        <p><strong>Skin Types:</strong> ${{skinTypeDisplay}}</p>
-                                        ${{raceHtml}}
-                                     </div>`;
+                        const lastUpdateYearDisplay = study.last_update_year || 'N/A';
+                        popupHtml += `<div style="border-top: ${{i > 0 ? '1px solid #ccc' : 'none'}}; padding: 10px 5px;"><h4 style="margin:0 0 10px 0;">Study Details</h4><p><strong>NCT ID:</strong> <a href="https://clinicaltrials.gov/study/${{study.nctId}}" target="_blank">${{study.nctId}}</a></p><p><strong>Status:</strong> ${{statusDisplay}}</p><p><strong>Last Updated:</strong> ${{lastUpdateYearDisplay}}</p><p><strong>Enrollment:</strong> <strong>${{enrollmentDisplay}}</strong></p><p><strong>Facility:</strong> ${{study.facility}}</p><p><strong>Skin Types:</strong> ${{skinTypeDisplay}}</p>${{raceHtml}}</div>`;
                     }});
                     popupHtml += '</div>';
-                    
-                    const markerRadius = 6 + Math.sqrt(passingStudies.length);
-                    
-                    L.circleMarker([lat, lon], {{
-                        radius: markerRadius,
-                        color: '#ffffff',
-                        weight: 2,
-                        fillColor: '#764ba2',
-                        fillOpacity: 0.8
-                    }})
-                    .bindPopup(popupHtml, {{maxWidth: 400}})
-                    .bindTooltip(`${{passingStudies[0].city}} (${{passingStudies.length}} studies)`)
-                    .addTo(markersLayer);
+                    L.circleMarker([lat, lon], {{ radius: 6 + Math.sqrt(passingStudies.length), color: '#ffffff', weight: 2, fillColor: '#764ba2', fillOpacity: 0.8 }}).bindPopup(popupHtml, {{maxWidth: 400}}).bindTooltip(`${{passingStudies[0].city}} (${{passingStudies.length}} studies)`).addTo(markersLayer);
                 }}
             }}
             document.getElementById('visible-locations-count').textContent = visibleLocations;
@@ -540,13 +379,12 @@ def create_interactive_map_with_sidebar(map_data, filename):
         window.resetAllFilters = function() {{
             document.querySelectorAll('.skin-type-item').forEach(item => item.classList.add('active'));
             document.querySelectorAll('.slider').forEach(slider => slider.value = 0);
+            const yearSlider = document.getElementById('year-range');
+            if(yearSlider) yearSlider.value = minYear;
             document.getElementById('enrollment-actual').checked = true;
             document.getElementById('enrollment-estimated').checked = true;
             document.getElementById('enrollment-na').checked = true;
-            allStatuses.forEach(status => {{
-                const checkbox = document.getElementById(`status-${{status.toLowerCase()}}`);
-                if (checkbox) checkbox.checked = true;
-            }});
+            allStatuses.forEach(status => {{ const checkbox = document.getElementById(`status-${{status.toLowerCase()}}`); if (checkbox) checkbox.checked = true; }});
             updateFilters();
         }};
     """
@@ -577,8 +415,7 @@ def main():
         details = extract_study_details(study, COUNTRY_TO_ISOLATE)
         if not details['us_facilities']: continue
         
-        for key in details['race_data']:
-            all_race_keys.add(key)
+        for key in details['race_data']: all_race_keys.add(key)
         
         inclusion_sentences = [s['sentence'] for s in parse_eligibility_criteria(study, SEARCH_KEYWORD) if not s['is_exclusion']]
         if not inclusion_sentences: continue
@@ -587,7 +424,12 @@ def main():
         if score_data['extracted_score'] == 'Not a Skin Type Score': continue
             
         for facility in details['us_facilities']:
-            row = {'nctId': nct_id, 'status': details['status'], 'enrollment': details['enrollment'], 'enrollment_type': details['enrollment_type']}
+            row = {
+                'nctId': nct_id, 'status': details['status'], 
+                'enrollment': details['enrollment'], 
+                'enrollment_type': details['enrollment_type'],
+                'last_update_year': details['last_update_year']
+            }
             row.update(score_data)
             row.update(facility)
             row.update(details['race_data'])
@@ -603,7 +445,6 @@ def main():
     df['enrollment'] = df['enrollment'].replace(0, 'N/A')
     df.fillna({'enrollment': 'N/A'}, inplace=True)
     df.fillna(0, inplace=True)
-
     print(f"[*] Processed data into {len(df)} facility-level records.")
 
     print("\n[*] Identifying studies that passed initial parsing but have no specific score assigned...")
@@ -616,10 +457,8 @@ def main():
     if not unparsed_df.empty:
         num_unparsed_studies = unparsed_df['nctId'].nunique()
         print(f"✅ Found {len(unparsed_df)} records from {num_unparsed_studies} unique studies with no specific Fitzpatrick Type flags.")
-        
         output_cols = ['nctId', 'facility', 'city', 'state', 'extracted_score']
         final_output_cols = [col for col in output_cols if col in unparsed_df.columns]
-        
         unparsed_df[final_output_cols].to_csv('usa_map/unparsed_studies.csv', index=False)
         print(f"[*] This list has been saved to 'unparsed_studies.csv' for your review.")
     else:
@@ -627,7 +466,7 @@ def main():
     
     if not unparsed_df.empty:
         print(f"\n[*] Dropping {len(unparsed_df)} records with no specific scores from the main dataset.")
-        df = df[~unparsed_mask] # Invert the mask to keep only the rows WITH scores
+        df = df[~unparsed_mask]
         print(f"[*] {len(df)} records remaining for the final CSV and map.")
 
     if df.empty:
@@ -641,5 +480,6 @@ def main():
         print(f"[!] Error writing final CSV file: {e}")
 
     create_interactive_map_with_sidebar(df.to_dict('records'), MAP_OUTPUT_HTML)
+
 if __name__ == "__main__":
     main()
