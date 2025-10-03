@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import requests
 import folium
+import math
 import googlemaps
 import numpy as np
 from folium.plugins import HeatMap
@@ -290,13 +291,26 @@ def create_interactive_map_with_sidebar(map_data, filename):
     print(f"[*] Generating interactive map from {len(map_data)} records...")
     us_center = [39.8283, -98.5795]
     m = folium.Map(location=us_center, zoom_start=4, tiles="cartodbpositron")
+    HeatMap([]).add_to(m)
 
-    # --- Prepare data for map layer ---
+    # --- Prepare data for map layers ---
     locations_data = defaultdict(list)
     for rec in map_data:
         if pd.notna(rec.get('latitude')) and pd.notna(rec.get('longitude')):
             key = f"{float(rec['latitude']):.6f},{float(rec['longitude']):.6f}"
             locations_data[key].append(rec)
+
+
+    heatmap_data = []
+    for loc_key, studies_at_loc in locations_data.items():
+        lat, lon = map(float, loc_key.split(','))
+        count = len(studies_at_loc)
+        # Use log1p which calculates log(1 + count) to handle single-study locations
+        weight = math.log1p(count) 
+        heatmap_data.append([lat, lon, weight])
+
+    heatmap_gradient = {0.4:'blue', 0.6:'lime', 0.8:'yellow', 1.0:'red'}
+
 
     # --- Prepare data for sidebar filters ---
     all_race_columns = sorted([col for col in map_data[0].keys() if str(col).startswith('Race_')]) if map_data else []
@@ -319,13 +333,18 @@ def create_interactive_map_with_sidebar(map_data, filename):
     skin_type_html = ''.join([f'<div class="skin-type-item active" data-type="{st}" onclick="this.classList.toggle(\'active\');updateFilters();"><div class="color-indicator" style="background-color:{c};"></div><span>Type {st}</span></div>' for st,c in type_colors.items()])
     race_filter_html = ''.join([f'<div class="race-filter"><label for="{rc.lower()}">{d["display_name"]}:</label><input type="range" id="{rc.lower()}" class="slider" min="0" max="{d["max"]}" value="0" oninput="updateFilters()"><div class="slider-value" id="{rc.lower()}-value">0+</div></div>' for rc,d in race_data.items()])
     status_checkboxes = ''.join([f'<div class="checkbox-item"><input type="checkbox" id="status-{s.lower()}" checked onchange="updateFilters()"><label for="status-{s.lower()}">{status_display_map.get(s,s)}</label></div>' for s in all_statuses])
+    
+    # --- Re-added for Heatmap ---
+    viz_switcher_html = """<div class="filter-section"><h3>Visualization Type</h3><div class="radio-group"><div class="radio-item"><input type="radio" id="viz-dots" name="viz-type" value="dots" checked onchange="updateVisualization()"><label for="viz-dots">Individual Locations (Dots)</label></div><div class="radio-item"><input type="radio" id="viz-heatmap" name="viz-type" value="heatmap" onchange="updateVisualization()"><label for="viz-heatmap">Density (Heatmap)</label></div></div></div>"""
 
-    sidebar_html = f""" <div class="sidebar"> <h2>US Fitzpatrick Trials</h2> <div class="filter-summary"> <div><strong>Studies:</strong> <span id="visible-studies-count">{total_studies}</span> of {total_studies}</div> <div><strong>Locations:</strong> <span id="visible-locations-count">{total_locations}</span> of {total_locations}</div> </div> <div class="filter-section"><h3>Fitzpatrick Skin Types</h3>{skin_type_html}</div> <div class="filter-section"> <h3>Enrollment</h3> <div class="control-group"><label for="min-enrollment">Minimum Enrollment:</label><input type="range" id="min-enrollment" class="slider" min="0" max="{max_enrollment}" value="0" oninput="updateFilters()"><div class="slider-value" id="min-enrollment-value">0+</div></div> <div class="control-group" style="margin-top:15px;"><label style="display:block;margin-bottom:8px;">Enrollment Type:</label><div class="checkbox-group"><div class="checkbox-item"><input type="checkbox" id="enrollment-actual" checked onchange="updateFilters()"><label for="enrollment-actual">Actual</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-estimated" checked onchange="updateFilters()"><label for="enrollment-estimated">Estimated</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-na" checked onchange="updateFilters()"><label for="enrollment-na">N/A</label></div></div></div> </div> <div class="filter-section"><h3>Study Status</h3><div class="checkbox-group">{status_checkboxes}</div></div> <div class="filter-section"> <h3>Last Updated Year</h3> <div class="control-group"><label for="year-range">Minimum Year:</label><input type="range" id="year-range" class="slider" min="{min_year}" max="{max_year}" value="{min_year}" oninput="updateFilters()"><div class="slider-value" id="year-range-value">{min_year}+</div></div> </div> <div class="filter-section"><h3>Race Demographics</h3>{race_filter_html}</div> <div class="filter-section"><button class="reset-btn" onclick="resetAllFilters()">Reset All Filters</button></div> </div> """
+    sidebar_html = f""" <div class="sidebar"> <h2>US Fitzpatrick Trials</h2> <div class="filter-summary"> <div><strong>Studies:</strong> <span id="visible-studies-count">{total_studies}</span> of {total_studies}</div> <div><strong>Locations:</strong> <span id="visible-locations-count">{total_locations}</span> of {total_locations}</div> </div> {viz_switcher_html} <div class="filter-section"><h3>Fitzpatrick Skin Types</h3>{skin_type_html}</div> <div class="filter-section"> <h3>Enrollment</h3> <div class="control-group"><label for="min-enrollment">Minimum Enrollment:</label><input type="range" id="min-enrollment" class="slider" min="0" max="{max_enrollment}" value="0" oninput="updateFilters()"><div class="slider-value" id="min-enrollment-value">0+</div></div> <div class="control-group" style="margin-top:15px;"><label style="display:block;margin-bottom:8px;">Enrollment Type:</label><div class="checkbox-group"><div class="checkbox-item"><input type="checkbox" id="enrollment-actual" checked onchange="updateFilters()"><label for="enrollment-actual">Actual</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-estimated" checked onchange="updateFilters()"><label for="enrollment-estimated">Estimated</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-na" checked onchange="updateFilters()"><label for="enrollment-na">N/A</label></div></div></div> </div> <div class="filter-section"><h3>Study Status</h3><div class="checkbox-group">{status_checkboxes}</div></div> <div class="filter-section"> <h3>Last Updated Year</h3> <div class="control-group"><label for="year-range">Minimum Year:</label><input type="range" id="year-range" class="slider" min="{min_year}" max="{max_year}" value="{min_year}" oninput="updateFilters()"><div class="slider-value" id="year-range-value">{min_year}+</div></div> </div> <div class="filter-section"><h3>Race Demographics</h3>{race_filter_html}</div> <div class="filter-section"><button class="reset-btn" onclick="resetAllFilters()">Reset All Filters</button></div> </div> """
 
-    # --- Simplified JavaScript using .format() ---
+    # --- JavaScript using .format() ---
     javascript_code = """
-        let mapInstance, markersLayer;
+        let mapInstance, markersLayer, heatmapLayer;
         const locationsData = {locations_data_json};
+        const heatmapData = {heatmap_data_json};
+        const heatmapGradient = {heatmap_gradient_json};
         const allRaceColumns = {all_race_columns_json};
         const raceDataInfo = {race_data_info_json};
         const allStatuses = {all_statuses_json};
@@ -338,9 +357,23 @@ def create_interactive_map_with_sidebar(map_data, filename):
         function initializeMap() {{
             mapInstance = findMapInstance();
             if (!mapInstance) {{ console.error("Map instance not found."); return; }}
-            markersLayer = L.layerGroup().addTo(mapInstance);
+            markersLayer = L.layerGroup();
+            heatmapLayer = L.heatLayer(heatmapData, {{ radius: 20, blur: 15, gradient: heatmapGradient}});
+            updateVisualization(); // Sets the initial view
             updateFilters();
         }}
+        
+        // --- Re-added for Heatmap ---
+        window.updateVisualization = function() {{
+            const vizType = document.querySelector('input[name="viz-type"]:checked').value;
+            if (vizType === 'dots') {{
+                if (mapInstance.hasLayer(heatmapLayer)) mapInstance.removeLayer(heatmapLayer);
+                if (!mapInstance.hasLayer(markersLayer)) mapInstance.addLayer(markersLayer);
+            }} else {{ // heatmap
+                if (mapInstance.hasLayer(markersLayer)) mapInstance.removeLayer(markersLayer);
+                if (!mapInstance.hasLayer(heatmapLayer)) mapInstance.addLayer(heatmapLayer);
+            }}
+        }};
 
         function passesFilters(record, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter) {{
             if (!activeTypes.some(type => record[`Type_${{type}}`] === 1)) return false;
@@ -404,7 +437,6 @@ def create_interactive_map_with_sidebar(map_data, filename):
                     }});
                     popupHtml += '</div>';
 
-                    // --- TOOLTIP LOGIC (TEXT ONLY) ---
                     const firstStudy = passingStudies[0];
                     const isPrecise = firstStudy.place_name && firstStudy.place_name !== 'NO_RESULTS_FOUND';
                     const tooltipPrefix = isPrecise ? '[Facility]' : '[City]';
@@ -421,6 +453,10 @@ def create_interactive_map_with_sidebar(map_data, filename):
         }};
 
         window.resetAllFilters = function() {{
+            // --- Re-added for Heatmap ---
+            document.getElementById('viz-dots').checked = true;
+            updateVisualization();
+
             document.querySelectorAll('.skin-type-item').forEach(item => item.classList.add('active'));
             document.querySelectorAll('.slider').forEach(slider => slider.value = 0);
             const yearSlider = document.getElementById('year-range');
@@ -433,6 +469,8 @@ def create_interactive_map_with_sidebar(map_data, filename):
         }};
     """.format(
         locations_data_json=json.dumps(locations_data),
+        heatmap_data_json=json.dumps(heatmap_data),
+        heatmap_gradient_json=json.dumps(heatmap_gradient),
         all_race_columns_json=json.dumps(all_race_columns),
         race_data_info_json=json.dumps(race_data),
         all_statuses_json=json.dumps(all_statuses),
