@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import requests
 import folium
+from folium.plugins import HeatMap
 from collections import defaultdict
 from branca.element import Element
 
@@ -180,8 +181,8 @@ def extract_study_details(study_record, country):
     return details
 
 def create_interactive_map_with_sidebar(map_data, filename):
-    """Creates an interactive Folium map with a custom sidebar interface,
-    using single-color, dynamically-sized markers."""
+    """Creates an interactive Folium map with a custom sidebar that
+    controls switching between individual markers and a heatmap."""
     if not map_data:
         print("[!] No data available to create a map.")
         return
@@ -189,7 +190,17 @@ def create_interactive_map_with_sidebar(map_data, filename):
     us_center = [39.8283, -98.5795]
     m = folium.Map(location=us_center, zoom_start=4, tiles="cartodbpositron")
 
+    HeatMap([]).add_to(m)
+    # --------------------------------------------------------
+
     print(f"[*] Generating map with interactive sidebar from {len(map_data)} records...")
+    
+    # --- Data Preparation for both visualizations ---
+    heatmap_data = [
+        [record['latitude'], record['longitude']] 
+        for record in map_data 
+        if record.get('latitude') is not None and record.get('longitude') is not None
+    ]
     
     locations_data = defaultdict(list)
     for record in map_data:
@@ -198,34 +209,21 @@ def create_interactive_map_with_sidebar(map_data, filename):
             key = f"{float(lat):.6f},{float(lon):.6f}"
             locations_data[key].append(record)
 
+    heatmap_gradient = {0.4: 'blue', 0.6: 'lime', 0.8: 'yellow', 1.0: 'red'}
+
     all_race_columns = sorted([col for col in map_data[0].keys() if col.startswith('Race_')]) if map_data else []
-    
     enrollment_values = [r.get('enrollment') for r in map_data if isinstance(r.get('enrollment'), (int, float)) and r.get('enrollment') > 0]
     max_enrollment = max(enrollment_values) if enrollment_values else 1000
-
     year_values = sorted([int(r['last_update_year']) for r in map_data if r.get('last_update_year', 'N/A').isdigit()])
     min_year, max_year = (min(year_values), max(year_values)) if year_values else (2000, 2025)
-    
     all_statuses = sorted(set(r.get('status', 'N/A') for r in map_data))
-    status_display_map = {
-        'ACTIVE_NOT_RECRUITING': 'Active, not recruiting', 'COMPLETED': 'Completed',
-        'ENROLLING_BY_INVITATION': 'Enrolling by invitation', 'NOT_YET_RECRUITING': 'Not yet recruiting',
-        'RECRUITING': 'Recruiting', 'SUSPENDED': 'Suspended', 'TERMINATED': 'Terminated',
-        'WITHDRAWN': 'Withdrawn', 'AVAILABLE': 'Available', 'NO_LONGER_AVAILABLE': 'No longer available',
-        'TEMPORARILY_NOT_AVAILABLE': 'Temporarily not available', 'APPROVED_FOR_MARKETING': 'Approved for marketing',
-        'WITHHELD': 'Withheld', 'UNKNOWN': 'Unknown status', 'N/A': 'N/A'
-    }
-    
+    status_display_map = { 'ACTIVE_NOT_RECRUITING': 'Active, not recruiting', 'COMPLETED': 'Completed', 'ENROLLING_BY_INVITATION': 'Enrolling by invitation', 'NOT_YET_RECRUITING': 'Not yet recruiting', 'RECRUITING': 'Recruiting', 'SUSPENDED': 'Suspended', 'TERMINATED': 'Terminated', 'WITHDRAWN': 'Withdrawn', 'AVAILABLE': 'Available', 'NO_LONGER_AVAILABLE': 'No longer available', 'TEMPORARILY_NOT_AVAILABLE': 'Temporarily not available', 'APPROVED_FOR_MARKETING': 'Approved for marketing', 'WITHHELD': 'Withheld', 'UNKNOWN': 'Unknown status', 'N/A': 'N/A' }
     total_studies = len(set(record['nctId'] for record in map_data))
     total_locations = len(locations_data)
-    
     race_data = {}
     for col in all_race_columns:
         values = [r.get(col, 0) for r in map_data if isinstance(r.get(col), (int, float)) and r.get(col) > 0]
-        if values: 
-            race_data[col] = {
-                'min': 0, 'max': max(values), 'display_name': col.replace('Race_', '').replace('_', ' ')
-            }
+        if values: race_data[col] = { 'min': 0, 'max': max(values), 'display_name': col.replace('Race_', '').replace('_', ' ') }
     
     css_rules = """
         body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
@@ -239,13 +237,12 @@ def create_interactive_map_with_sidebar(map_data, filename):
         .slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #ffd700; cursor: pointer; }
         .slider-value { font-size: 12px; color: #ffd700; text-align: center; margin-top: 5px; font-weight: bold; }
         .reset-btn { width: 100%; padding: 10px; background: rgba(255,255,255,0.2); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; margin-top: 10px; }
-        .checkbox-group { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-        .checkbox-item { display: flex; align-items: center; cursor: pointer; padding: 6px 8px; border-radius: 4px; background: rgba(0,0,0,0.2); transition: background 0.2s; }
-        .checkbox-item:hover { background: rgba(255,255,255,0.1); }
-        .checkbox-item input[type="checkbox"] { margin-right: 8px; cursor: pointer; }
-        .checkbox-item label { cursor: pointer; font-size: 13px; flex: 1; }
+        .checkbox-group, .radio-group { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+        .checkbox-item, .radio-item { display: flex; align-items: center; cursor: pointer; padding: 6px 8px; border-radius: 4px; background: rgba(0,0,0,0.2); transition: background 0.2s; }
+        .checkbox-item:hover, .radio-item:hover { background: rgba(255,255,255,0.1); }
+        .checkbox-item input, .radio-item input { margin-right: 8px; cursor: pointer; }
+        .checkbox-item label, .radio-item label { cursor: pointer; font-size: 13px; flex: 1; }
         .folium-map { position: absolute; top: 0; left: 320px; right: 0; bottom: 0; z-index: 1000; }
-        .leaflet-control-layers { display: none !important; }
         .filter-summary { background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; }
         .filter-summary div:not(:last-child) { margin-bottom: 4px; }
         .race-filter { margin-bottom: 10px; }
@@ -257,6 +254,22 @@ def create_interactive_map_with_sidebar(map_data, filename):
     race_filter_html = ''.join([ f'<div class="race-filter"><label for="{race_col.lower()}">{data["display_name"]}:</label><input type="range" id="{race_col.lower()}" class="slider" min="0" max="{data["max"]}" value="0" oninput="updateFilters()"><div class="slider-value" id="{race_col.lower()}-value">0+</div></div>' for race_col, data in race_data.items() ])
     status_checkboxes = ''.join([ f'<div class="checkbox-item"><input type="checkbox" id="status-{status.lower()}" checked onchange="updateFilters()"><label for="status-{status.lower()}">{status_display_map.get(status, status)}</label></div>' for status in all_statuses ])
 
+    viz_switcher_html = """
+        <div class="filter-section">
+            <h3>Visualization Type</h3>
+            <div class="radio-group">
+                <div class="radio-item">
+                    <input type="radio" id="viz-dots" name="viz-type" value="dots" checked onchange="updateVisualization()">
+                    <label for="viz-dots">Individual Locations (Dots)</label>
+                </div>
+                <div class="radio-item">
+                    <input type="radio" id="viz-heatmap" name="viz-type" value="heatmap" onchange="updateVisualization()">
+                    <label for="viz-heatmap">Density (Heatmap)</label>
+                </div>
+            </div>
+        </div>
+    """
+
     sidebar_html = f"""
     <div class="sidebar">
         <h2>US Fitzpatrick Trials</h2>
@@ -264,6 +277,7 @@ def create_interactive_map_with_sidebar(map_data, filename):
             <div><strong>Studies:</strong> <span id="visible-studies-count">{total_studies}</span> of {total_studies}</div>
             <div><strong>Locations:</strong> <span id="visible-locations-count">{total_locations}</span> of {total_locations}</div>
         </div>
+        {viz_switcher_html}
         <div class="filter-section"><h3>Fitzpatrick Skin Types</h3>{skin_type_html}</div>
         <div class="filter-section">
             <h3>Enrollment</h3>
@@ -280,10 +294,15 @@ def create_interactive_map_with_sidebar(map_data, filename):
     </div>
     """
     
+    # The rest of the function (the javascript_code string) remains exactly the same
     javascript_code = f"""
         let mapInstance;
-        let markersLayer = L.layerGroup();
+        let markersLayer;
+        let heatmapLayer;
+
         const locationsData = {json.dumps(locations_data)};
+        const heatmapData = {json.dumps(heatmap_data)};
+        const heatmapGradient = {json.dumps(heatmap_gradient)};
         const allRaceColumns = {json.dumps(all_race_columns)};
         const raceDataInfo = {json.dumps(race_data)};
         const totalStudies = {total_studies};
@@ -300,26 +319,46 @@ def create_interactive_map_with_sidebar(map_data, filename):
         function initializeMap() {{
             mapInstance = findMapInstance();
             if (!mapInstance) {{ console.error("Map instance not found. Retrying..."); setTimeout(initializeMap, 500); return; }}
-            console.log("Map instance found:", mapInstance);
-            markersLayer.addTo(mapInstance);
+            
+            markersLayer = L.layerGroup();
+            heatmapLayer = L.heatLayer(heatmapData, {{ 
+                radius: 25, 
+                blur: 15,
+                gradient: heatmapGradient 
+            }});
+
+            updateVisualization();
             updateFilters();
         }}
         
-        window.toggleSkinType = function(element) {{ element.classList.toggle('active'); updateFilters(); }}
+        window.updateVisualization = function() {{
+            const vizType = document.querySelector('input[name="viz-type"]:checked').value;
+            if (vizType === 'dots') {{
+                if (mapInstance.hasLayer(heatmapLayer)) {{
+                    mapInstance.removeLayer(heatmapLayer);
+                }}
+                if (!mapInstance.hasLayer(markersLayer)) {{
+                    mapInstance.addLayer(markersLayer);
+                }}
+            }} else {{ // heatmap
+                if (mapInstance.hasLayer(markersLayer)) {{
+                    mapInstance.removeLayer(markersLayer);
+                }}
+                if (!mapInstance.hasLayer(heatmapLayer)) {{
+                    mapInstance.addLayer(heatmapLayer);
+                }}
+            }}
+        }}
 
         function passesFilters(record, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter) {{
             let hasActiveSkinType = activeTypes.some(type => record[`Type_${{type}}`] === 1);
             if (!hasActiveSkinType) return false;
-            
             const recordYear = parseInt(record.last_update_year);
             if (!isNaN(recordYear) && recordYear < yearFilter) return false;
-
             const enrollment = record.enrollment === 'N/A' ? 0 : record.enrollment;
             if (enrollment < enrollmentFilter) return false;
-
             if (!enrollmentTypes.includes((record.enrollment_type || 'N/A').toUpperCase())) return false;
             if (!statusTypes.includes(record.status || 'N/A')) return false;
-
             for (const [raceCol, minVal] of Object.entries(raceFilters)) {{
                 if ((record[raceCol] || 0) < minVal) return false;
             }}
@@ -327,7 +366,7 @@ def create_interactive_map_with_sidebar(map_data, filename):
         }}
 
         window.updateFilters = function() {{
-            if (!mapInstance) {{ console.warn('Map not ready for update.'); return; }}
+            if (!mapInstance || !markersLayer) {{ console.warn('Map or layers not ready for update.'); return; }}
 
             const activeTypes = Array.from(document.querySelectorAll('.skin-type-item.active')).map(el => el.dataset.type);
             const enrollmentFilter = parseInt(document.getElementById('min-enrollment').value);
@@ -377,6 +416,8 @@ def create_interactive_map_with_sidebar(map_data, filename):
         }};
 
         window.resetAllFilters = function() {{
+            document.getElementById('viz-dots').checked = true;
+            updateVisualization();
             document.querySelectorAll('.skin-type-item').forEach(item => item.classList.add('active'));
             document.querySelectorAll('.slider').forEach(slider => slider.value = 0);
             const yearSlider = document.getElementById('year-range');
@@ -392,10 +433,9 @@ def create_interactive_map_with_sidebar(map_data, filename):
     m.get_root().header.add_child(Element(f"<style>{css_rules}</style>"))
     m.get_root().html.add_child(Element(sidebar_html))
     m.get_root().script.add_child(Element(javascript_code))
-
+    
     m.save(filename)
     print(f"\n[*] Success! Interactive map saved to '{filename}'.")
-
 def main():
     """Main function to run the entire data processing and mapping pipeline."""
     fetch_clinical_trials_data(API_BASE_URL, SEARCH_KEYWORD, RAW_JSON_FILENAME)
