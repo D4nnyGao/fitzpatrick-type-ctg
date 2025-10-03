@@ -18,7 +18,7 @@
             <meta name="viewport" content="width=device-width,
                 initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
             <style>
-                #map_0ed0df4e84fc10b6b8a90cf47400dd38 {
+                #map_755a0a8adb93fdefb6aa8df6dd48da16 {
                     position: relative;
                     width: 100.0%;
                     height: 100.0%;
@@ -57,7 +57,7 @@
     
      <div class="sidebar"> <h2>US Fitzpatrick Trials</h2> <div class="filter-summary"> <div><strong>Studies:</strong> <span id="visible-studies-count">620</span> of 620</div> <div><strong>Locations:</strong> <span id="visible-locations-count">546</span> of 546</div> </div> <div class="filter-section"><h3>Visualization Type</h3><div class="radio-group"><div class="radio-item"><input type="radio" id="viz-dots" name="viz-type" value="dots" checked onchange="updateVisualization()"><label for="viz-dots">Individual Locations (Dots)</label></div><div class="radio-item"><input type="radio" id="viz-heatmap" name="viz-type" value="heatmap" onchange="updateVisualization()"><label for="viz-heatmap">Density (Heatmap)</label></div></div></div> <div class="filter-section"><h3>Fitzpatrick Skin Types</h3><div class="skin-type-item active" data-type="I" onclick="this.classList.toggle('active');updateFilters();"><div class="color-indicator" style="background-color:#FFE5E5;"></div><span>Type I</span></div><div class="skin-type-item active" data-type="II" onclick="this.classList.toggle('active');updateFilters();"><div class="color-indicator" style="background-color:#FFB3B3;"></div><span>Type II</span></div><div class="skin-type-item active" data-type="III" onclick="this.classList.toggle('active');updateFilters();"><div class="color-indicator" style="background-color:#FF8080;"></div><span>Type III</span></div><div class="skin-type-item active" data-type="IV" onclick="this.classList.toggle('active');updateFilters();"><div class="color-indicator" style="background-color:#CC6600;"></div><span>Type IV</span></div><div class="skin-type-item active" data-type="V" onclick="this.classList.toggle('active');updateFilters();"><div class="color-indicator" style="background-color:#8B4513;"></div><span>Type V</span></div><div class="skin-type-item active" data-type="VI" onclick="this.classList.toggle('active');updateFilters();"><div class="color-indicator" style="background-color:#654321;"></div><span>Type VI</span></div></div> <div class="filter-section"> <h3>Enrollment</h3> <div class="control-group"><label for="min-enrollment">Minimum Enrollment:</label><input type="range" id="min-enrollment" class="slider" min="0" max="1000.0" value="0" oninput="updateFilters()"><div class="slider-value" id="min-enrollment-value">0+</div></div> <div class="control-group" style="margin-top:15px;"><label style="display:block;margin-bottom:8px;">Enrollment Type:</label><div class="checkbox-group"><div class="checkbox-item"><input type="checkbox" id="enrollment-actual" checked onchange="updateFilters()"><label for="enrollment-actual">Actual</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-estimated" checked onchange="updateFilters()"><label for="enrollment-estimated">Estimated</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-na" checked onchange="updateFilters()"><label for="enrollment-na">N/A</label></div></div></div> </div> <div class="filter-section"><h3>Study Status</h3><div class="checkbox-group"><div class="checkbox-item"><input type="checkbox" id="status-active_not_recruiting" checked onchange="updateFilters()"><label for="status-active_not_recruiting">Active, not recruiting</label></div><div class="checkbox-item"><input type="checkbox" id="status-completed" checked onchange="updateFilters()"><label for="status-completed">Completed</label></div><div class="checkbox-item"><input type="checkbox" id="status-enrolling_by_invitation" checked onchange="updateFilters()"><label for="status-enrolling_by_invitation">Enrolling by invitation</label></div><div class="checkbox-item"><input type="checkbox" id="status-not_yet_recruiting" checked onchange="updateFilters()"><label for="status-not_yet_recruiting">Not yet recruiting</label></div><div class="checkbox-item"><input type="checkbox" id="status-recruiting" checked onchange="updateFilters()"><label for="status-recruiting">Recruiting</label></div><div class="checkbox-item"><input type="checkbox" id="status-suspended" checked onchange="updateFilters()"><label for="status-suspended">Suspended</label></div><div class="checkbox-item"><input type="checkbox" id="status-terminated" checked onchange="updateFilters()"><label for="status-terminated">Terminated</label></div><div class="checkbox-item"><input type="checkbox" id="status-unknown" checked onchange="updateFilters()"><label for="status-unknown">Unknown status</label></div><div class="checkbox-item"><input type="checkbox" id="status-withdrawn" checked onchange="updateFilters()"><label for="status-withdrawn">Withdrawn</label></div></div></div> <div class="filter-section"> <h3>Last Updated Year</h3> <div class="control-group"><label for="year-range">Minimum Year:</label><input type="range" id="year-range" class="slider" min="2006" max="2025" value="2006" oninput="updateFilters()"><div class="slider-value" id="year-range-value">2006+</div></div> </div> <div class="filter-section"><h3>Race Demographics</h3><div class="race-filter"><label for="race_american_indian_or_alaska_native">American Indian or Alaska Native:</label><input type="range" id="race_american_indian_or_alaska_native" class="slider" min="0" max="6" value="0" oninput="updateFilters()"><div class="slider-value" id="race_american_indian_or_alaska_native-value">0+</div></div><div class="race-filter"><label for="race_asian">Asian:</label><input type="range" id="race_asian" class="slider" min="0" max="154" value="0" oninput="updateFilters()"><div class="slider-value" id="race_asian-value">0+</div></div><div class="race-filter"><label for="race_black_or_african_american">Black or African American:</label><input type="range" id="race_black_or_african_american" class="slider" min="0" max="174" value="0" oninput="updateFilters()"><div class="slider-value" id="race_black_or_african_american-value">0+</div></div><div class="race-filter"><label for="race_more_than_one_race">More than one race:</label><input type="range" id="race_more_than_one_race" class="slider" min="0" max="12" value="0" oninput="updateFilters()"><div class="slider-value" id="race_more_than_one_race-value">0+</div></div><div class="race-filter"><label for="race_native_hawaiian_or_other_pacific_islander">Native Hawaiian or Other Pacific Islander:</label><input type="range" id="race_native_hawaiian_or_other_pacific_islander" class="slider" min="0" max="4" value="0" oninput="updateFilters()"><div class="slider-value" id="race_native_hawaiian_or_other_pacific_islander-value">0+</div></div><div class="race-filter"><label for="race_unknown_or_not_reported">Unknown or Not Reported:</label><input type="range" id="race_unknown_or_not_reported" class="slider" min="0" max="53" value="0" oninput="updateFilters()"><div class="slider-value" id="race_unknown_or_not_reported-value">0+</div></div><div class="race-filter"><label for="race_white">White:</label><input type="range" id="race_white" class="slider" min="0" max="350" value="0" oninput="updateFilters()"><div class="slider-value" id="race_white-value">0+</div></div></div> <div class="filter-section"><button class="reset-btn" onclick="resetAllFilters()">Reset All Filters</button></div> </div> 
     
-            <div class="folium-map" id="map_0ed0df4e84fc10b6b8a90cf47400dd38" ></div>
+            <div class="folium-map" id="map_755a0a8adb93fdefb6aa8df6dd48da16" ></div>
         
 </body>
 <script>
@@ -80,12 +80,11 @@
             mapInstance = findMapInstance();
             if (!mapInstance) { console.error("Map instance not found."); return; }
             markersLayer = L.layerGroup();
-            heatmapLayer = L.heatLayer(heatmapData, { radius: 20, blur: 15, gradient: heatmapGradient});
-            updateVisualization(); // Sets the initial view
+            heatmapLayer = L.heatLayer(heatmapData, { radius: 25, blur: 15, gradient: heatmapGradient });
+            updateVisualization();
             updateFilters();
         }
         
-        // --- Re-added for Heatmap ---
         window.updateVisualization = function() {
             const vizType = document.querySelector('input[name="viz-type"]:checked').value;
             if (vizType === 'dots') {
@@ -111,8 +110,13 @@
             return true;
         }
 
+        // ==========================================================
+        // ===== THIS ENTIRE FUNCTION HAS BEEN UPDATED =============
+        // ==========================================================
         window.updateFilters = function() {
             if (!mapInstance || !markersLayer) return;
+
+            // 1. Get all current filter values from the sidebar
             const activeTypes = Array.from(document.querySelectorAll('.skin-type-item.active')).map(el => el.dataset.type);
             const enrollmentFilter = parseInt(document.getElementById('min-enrollment').value);
             document.getElementById('min-enrollment-value').textContent = enrollmentFilter + '+';
@@ -133,15 +137,23 @@
                     document.getElementById(elId + '-value').textContent = minValue + '+';
                 }
             }
+
+            // 2. Prepare for rebuilding layers
             markersLayer.clearLayers();
             let visibleLocations = 0;
             const visibleStudies = new Set();
+            const newHeatmapData = []; // <-- Key change: Create new array for filtered heatmap data
+
+            // 3. Loop through all locations and apply filters once
             for (const [locKey, studiesAtLoc] of Object.entries(locationsData)) {
                 const passingStudies = studiesAtLoc.filter(study => passesFilters(study, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter));
+                
                 if (passingStudies.length > 0) {
                     visibleLocations++;
                     passingStudies.forEach(study => visibleStudies.add(study.nctId));
                     const [lat, lon] = locKey.split(',').map(Number);
+                    
+                    // --- A. Rebuild the MARKERS as before ---
                     let popupHtml = '<div style="font-family: Arial, sans-serif; max-height: 300px; overflow-y: auto; min-width: 350px;">';
                     passingStudies.forEach((study, i) => {
                         let raceHtml = "";
@@ -158,27 +170,31 @@
                         popupHtml += `<div style="border-top: ${i > 0 ? '1px solid #ccc' : 'none'}; padding: 10px 5px;"><h4 style="margin:0 0 10px 0;">Study Details</h4><p><strong>NCT ID:</strong> <a href="https://clinicaltrials.gov/study/${study.nctId}" target="_blank">${study.nctId}</a></p><p><strong>Status:</strong> ${statusDisplay}</p><p><strong>Last Updated:</strong> ${lastUpdateYearDisplay}</p><p><strong>Enrollment:</strong> <strong>${enrollmentDisplay}</strong></p><p><strong>Facility:</strong> ${study.facility}</p><p><strong>Skin Types:</strong> ${skinTypeDisplay}</p>${raceHtml}</div>`;
                     });
                     popupHtml += '</div>';
-
                     const firstStudy = passingStudies[0];
                     const isPrecise = firstStudy.place_name && firstStudy.place_name !== 'NO_RESULTS_FOUND';
                     const tooltipPrefix = isPrecise ? '[Facility]' : '[City]';
                     const tooltipName = isPrecise ? firstStudy.place_name : firstStudy.city;
-                    
                     L.circleMarker([lat, lon], { radius: 6 + Math.sqrt(passingStudies.length), color: '#ffffff', weight: 2, fillColor: '#764ba2', fillOpacity: 0.8 })
                         .bindPopup(popupHtml, {maxWidth: 400})
                         .bindTooltip(`${tooltipPrefix} ${tooltipName} (${passingStudies.length} studies)`)
                         .addTo(markersLayer);
+
+                    // --- B. Add a point to our NEW HEATMAP data ---
+                    const count = passingStudies.length;
+                    const weight = Math.log1p(count); // Using the same log scaling
+                    newHeatmapData.push([lat, lon, weight]);
                 }
             }
+            
+            // 4. Update the UI counts and the heatmap layer
             document.getElementById('visible-locations-count').textContent = visibleLocations;
             document.getElementById('visible-studies-count').textContent = visibleStudies.size;
+            heatmapLayer.setLatLngs(newHeatmapData); // <-- Key change: Update the heatmap layer
         };
 
         window.resetAllFilters = function() {
-            // --- Re-added for Heatmap ---
             document.getElementById('viz-dots').checked = true;
             updateVisualization();
-
             document.querySelectorAll('.skin-type-item').forEach(item => item.classList.add('active'));
             document.querySelectorAll('.slider').forEach(slider => slider.value = 0);
             const yearSlider = document.getElementById('year-range');
@@ -191,8 +207,8 @@
         };
     
     
-            var map_0ed0df4e84fc10b6b8a90cf47400dd38 = L.map(
-                "map_0ed0df4e84fc10b6b8a90cf47400dd38",
+            var map_755a0a8adb93fdefb6aa8df6dd48da16 = L.map(
+                "map_755a0a8adb93fdefb6aa8df6dd48da16",
                 {
                     center: [39.8283, -98.5795],
                     crs: L.CRS.EPSG3857,
@@ -209,7 +225,7 @@
 
         
     
-            var tile_layer_612a4d6bb269570d0c522e07f71c26dc = L.tileLayer(
+            var tile_layer_8a2dffe03c6159b0e4283e3560934f2e = L.tileLayer(
                 "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
                 {
   "minZoom": 0,
@@ -226,10 +242,10 @@
             );
         
     
-            tile_layer_612a4d6bb269570d0c522e07f71c26dc.addTo(map_0ed0df4e84fc10b6b8a90cf47400dd38);
+            tile_layer_8a2dffe03c6159b0e4283e3560934f2e.addTo(map_755a0a8adb93fdefb6aa8df6dd48da16);
         
     
-            var heat_map_e6beb07b1f2458baeb7d30664fe65988 = L.heatLayer(
+            var heat_map_2d1f85a42cc0b7ce49c747840a6ddc18 = L.heatLayer(
                 [],
                 {
   "minOpacity": 0.5,
@@ -240,7 +256,7 @@
             );
         
     
-            heat_map_e6beb07b1f2458baeb7d30664fe65988.addTo(map_0ed0df4e84fc10b6b8a90cf47400dd38);
+            heat_map_2d1f85a42cc0b7ce49c747840a6ddc18.addTo(map_755a0a8adb93fdefb6aa8df6dd48da16);
         
 </script>
 </html>

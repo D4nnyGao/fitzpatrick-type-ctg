@@ -300,17 +300,14 @@ def create_interactive_map_with_sidebar(map_data, filename):
             key = f"{float(rec['latitude']):.6f},{float(rec['longitude']):.6f}"
             locations_data[key].append(rec)
 
-
     heatmap_data = []
     for loc_key, studies_at_loc in locations_data.items():
         lat, lon = map(float, loc_key.split(','))
         count = len(studies_at_loc)
-        # Use log1p which calculates log(1 + count) to handle single-study locations
         weight = math.log1p(count) 
         heatmap_data.append([lat, lon, weight])
-
+        
     heatmap_gradient = {0.4:'blue', 0.6:'lime', 0.8:'yellow', 1.0:'red'}
-
 
     # --- Prepare data for sidebar filters ---
     all_race_columns = sorted([col for col in map_data[0].keys() if str(col).startswith('Race_')]) if map_data else []
@@ -333,13 +330,10 @@ def create_interactive_map_with_sidebar(map_data, filename):
     skin_type_html = ''.join([f'<div class="skin-type-item active" data-type="{st}" onclick="this.classList.toggle(\'active\');updateFilters();"><div class="color-indicator" style="background-color:{c};"></div><span>Type {st}</span></div>' for st,c in type_colors.items()])
     race_filter_html = ''.join([f'<div class="race-filter"><label for="{rc.lower()}">{d["display_name"]}:</label><input type="range" id="{rc.lower()}" class="slider" min="0" max="{d["max"]}" value="0" oninput="updateFilters()"><div class="slider-value" id="{rc.lower()}-value">0+</div></div>' for rc,d in race_data.items()])
     status_checkboxes = ''.join([f'<div class="checkbox-item"><input type="checkbox" id="status-{s.lower()}" checked onchange="updateFilters()"><label for="status-{s.lower()}">{status_display_map.get(s,s)}</label></div>' for s in all_statuses])
-    
-    # --- Re-added for Heatmap ---
     viz_switcher_html = """<div class="filter-section"><h3>Visualization Type</h3><div class="radio-group"><div class="radio-item"><input type="radio" id="viz-dots" name="viz-type" value="dots" checked onchange="updateVisualization()"><label for="viz-dots">Individual Locations (Dots)</label></div><div class="radio-item"><input type="radio" id="viz-heatmap" name="viz-type" value="heatmap" onchange="updateVisualization()"><label for="viz-heatmap">Density (Heatmap)</label></div></div></div>"""
-
     sidebar_html = f""" <div class="sidebar"> <h2>US Fitzpatrick Trials</h2> <div class="filter-summary"> <div><strong>Studies:</strong> <span id="visible-studies-count">{total_studies}</span> of {total_studies}</div> <div><strong>Locations:</strong> <span id="visible-locations-count">{total_locations}</span> of {total_locations}</div> </div> {viz_switcher_html} <div class="filter-section"><h3>Fitzpatrick Skin Types</h3>{skin_type_html}</div> <div class="filter-section"> <h3>Enrollment</h3> <div class="control-group"><label for="min-enrollment">Minimum Enrollment:</label><input type="range" id="min-enrollment" class="slider" min="0" max="{max_enrollment}" value="0" oninput="updateFilters()"><div class="slider-value" id="min-enrollment-value">0+</div></div> <div class="control-group" style="margin-top:15px;"><label style="display:block;margin-bottom:8px;">Enrollment Type:</label><div class="checkbox-group"><div class="checkbox-item"><input type="checkbox" id="enrollment-actual" checked onchange="updateFilters()"><label for="enrollment-actual">Actual</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-estimated" checked onchange="updateFilters()"><label for="enrollment-estimated">Estimated</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-na" checked onchange="updateFilters()"><label for="enrollment-na">N/A</label></div></div></div> </div> <div class="filter-section"><h3>Study Status</h3><div class="checkbox-group">{status_checkboxes}</div></div> <div class="filter-section"> <h3>Last Updated Year</h3> <div class="control-group"><label for="year-range">Minimum Year:</label><input type="range" id="year-range" class="slider" min="{min_year}" max="{max_year}" value="{min_year}" oninput="updateFilters()"><div class="slider-value" id="year-range-value">{min_year}+</div></div> </div> <div class="filter-section"><h3>Race Demographics</h3>{race_filter_html}</div> <div class="filter-section"><button class="reset-btn" onclick="resetAllFilters()">Reset All Filters</button></div> </div> """
 
-    # --- JavaScript using .format() ---
+    # --- UPDATED JavaScript ---
     javascript_code = """
         let mapInstance, markersLayer, heatmapLayer;
         const locationsData = {locations_data_json};
@@ -358,12 +352,11 @@ def create_interactive_map_with_sidebar(map_data, filename):
             mapInstance = findMapInstance();
             if (!mapInstance) {{ console.error("Map instance not found."); return; }}
             markersLayer = L.layerGroup();
-            heatmapLayer = L.heatLayer(heatmapData, {{ radius: 20, blur: 15, gradient: heatmapGradient}});
-            updateVisualization(); // Sets the initial view
+            heatmapLayer = L.heatLayer(heatmapData, {{ radius: 25, blur: 15, gradient: heatmapGradient }});
+            updateVisualization();
             updateFilters();
         }}
         
-        // --- Re-added for Heatmap ---
         window.updateVisualization = function() {{
             const vizType = document.querySelector('input[name="viz-type"]:checked').value;
             if (vizType === 'dots') {{
@@ -389,8 +382,13 @@ def create_interactive_map_with_sidebar(map_data, filename):
             return true;
         }}
 
+        // ==========================================================
+        // ===== THIS ENTIRE FUNCTION HAS BEEN UPDATED =============
+        // ==========================================================
         window.updateFilters = function() {{
             if (!mapInstance || !markersLayer) return;
+
+            // 1. Get all current filter values from the sidebar
             const activeTypes = Array.from(document.querySelectorAll('.skin-type-item.active')).map(el => el.dataset.type);
             const enrollmentFilter = parseInt(document.getElementById('min-enrollment').value);
             document.getElementById('min-enrollment-value').textContent = enrollmentFilter + '+';
@@ -411,15 +409,23 @@ def create_interactive_map_with_sidebar(map_data, filename):
                     document.getElementById(elId + '-value').textContent = minValue + '+';
                 }}
             }}
+
+            // 2. Prepare for rebuilding layers
             markersLayer.clearLayers();
             let visibleLocations = 0;
             const visibleStudies = new Set();
+            const newHeatmapData = []; // <-- Key change: Create new array for filtered heatmap data
+
+            // 3. Loop through all locations and apply filters once
             for (const [locKey, studiesAtLoc] of Object.entries(locationsData)) {{
                 const passingStudies = studiesAtLoc.filter(study => passesFilters(study, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter));
+                
                 if (passingStudies.length > 0) {{
                     visibleLocations++;
                     passingStudies.forEach(study => visibleStudies.add(study.nctId));
                     const [lat, lon] = locKey.split(',').map(Number);
+                    
+                    // --- A. Rebuild the MARKERS as before ---
                     let popupHtml = '<div style="font-family: Arial, sans-serif; max-height: 300px; overflow-y: auto; min-width: 350px;">';
                     passingStudies.forEach((study, i) => {{
                         let raceHtml = "";
@@ -436,27 +442,31 @@ def create_interactive_map_with_sidebar(map_data, filename):
                         popupHtml += `<div style="border-top: ${{i > 0 ? '1px solid #ccc' : 'none'}}; padding: 10px 5px;"><h4 style="margin:0 0 10px 0;">Study Details</h4><p><strong>NCT ID:</strong> <a href="https://clinicaltrials.gov/study/${{study.nctId}}" target="_blank">${{study.nctId}}</a></p><p><strong>Status:</strong> ${{statusDisplay}}</p><p><strong>Last Updated:</strong> ${{lastUpdateYearDisplay}}</p><p><strong>Enrollment:</strong> <strong>${{enrollmentDisplay}}</strong></p><p><strong>Facility:</strong> ${{study.facility}}</p><p><strong>Skin Types:</strong> ${{skinTypeDisplay}}</p>${{raceHtml}}</div>`;
                     }});
                     popupHtml += '</div>';
-
                     const firstStudy = passingStudies[0];
                     const isPrecise = firstStudy.place_name && firstStudy.place_name !== 'NO_RESULTS_FOUND';
                     const tooltipPrefix = isPrecise ? '[Facility]' : '[City]';
                     const tooltipName = isPrecise ? firstStudy.place_name : firstStudy.city;
-                    
                     L.circleMarker([lat, lon], {{ radius: 6 + Math.sqrt(passingStudies.length), color: '#ffffff', weight: 2, fillColor: '#764ba2', fillOpacity: 0.8 }})
                         .bindPopup(popupHtml, {{maxWidth: 400}})
                         .bindTooltip(`${{tooltipPrefix}} ${{tooltipName}} (${{passingStudies.length}} studies)`)
                         .addTo(markersLayer);
+
+                    // --- B. Add a point to our NEW HEATMAP data ---
+                    const count = passingStudies.length;
+                    const weight = Math.log1p(count); // Using the same log scaling
+                    newHeatmapData.push([lat, lon, weight]);
                 }}
             }}
+            
+            // 4. Update the UI counts and the heatmap layer
             document.getElementById('visible-locations-count').textContent = visibleLocations;
             document.getElementById('visible-studies-count').textContent = visibleStudies.size;
+            heatmapLayer.setLatLngs(newHeatmapData); // <-- Key change: Update the heatmap layer
         }};
 
         window.resetAllFilters = function() {{
-            // --- Re-added for Heatmap ---
             document.getElementById('viz-dots').checked = true;
             updateVisualization();
-
             document.querySelectorAll('.skin-type-item').forEach(item => item.classList.add('active'));
             document.querySelectorAll('.slider').forEach(slider => slider.value = 0);
             const yearSlider = document.getElementById('year-range');
