@@ -8,6 +8,7 @@ import folium
 import math
 import googlemaps
 import numpy as np
+import ast
 from folium.plugins import HeatMap
 from collections import defaultdict
 from branca.element import Element
@@ -37,7 +38,19 @@ def fetch_clinical_trials_data(api_url, keyword, output_filename):
     page_count = 1
     next_page_token = None
     eligibility_search = f'AREA[EligibilityCriteria]({keyword}) AND SEARCH[Location](AREA[LocationCountry]"{COUNTRY_TO_ISOLATE}")'
-    fields_to_get = ["NCTId", "protocolSection", "resultsSection"]
+    
+    # --- KEY CHANGE HERE ---
+    # Be more specific about which data modules are needed from the API.
+    # This ensures phase and contact info are reliably included in the response.
+    fields_to_get = [
+        "NCTId",
+        "protocolSection.statusModule",
+        "protocolSection.identificationModule",
+        "protocolSection.designModule",
+        "protocolSection.contactsLocationsModule",
+        "protocolSection.eligibilityModule",
+        "resultsSection.baselineCharacteristicsModule"
+    ]
     params = {'query.term': eligibility_search, 'fields': ",".join(fields_to_get), 'pageSize': 100}
 
     while True:
@@ -97,7 +110,7 @@ def extract_and_standardize_scores(sentence):
 
     roman_map = {'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5, 'VI': 6}
     to_roman_map = {v: k for k, v in roman_map.items()}
-    
+
     def _to_int(s):
         s_upper = s.upper()
         if s_upper == 'L': return 1
@@ -128,10 +141,14 @@ def extract_and_standardize_scores(sentence):
 
 def extract_study_details(study_record, country):
     """Extracts key details from a single study record."""
-    details = {'status': "N/A", 'us_facilities': [], 'enrollment': 'N/A', 'enrollment_type': 'N/A', 'race_data': {}, 'last_update_year': 'N/A'}
+    details = {
+        'status': "N/A", 'us_facilities': [], 'enrollment': 'N/A',
+        'enrollment_type': 'N/A', 'race_data': {}, 'last_update_year': 'N/A',
+        'phase': 'N/A', 'central_contacts': [], 'overall_officials': []
+    }
     protocol = study_record.get('protocolSection', {})
     if not protocol: return details
-    
+
     status_module = protocol.get('statusModule', {})
     details['status'] = status_module.get('overallStatus', 'N/A')
     post_date_struct = status_module.get('lastUpdatePostDateStruct', {})
@@ -139,51 +156,67 @@ def extract_study_details(study_record, country):
         if isinstance(last_update_date, str) and len(last_update_date) >= 4:
             details['last_update_year'] = last_update_date[:4]
 
-    if enrollment_info := protocol.get('designModule', {}).get('enrollmentInfo'):
+    design_module = protocol.get('designModule', {})
+    if enrollment_info := design_module.get('enrollmentInfo'):
         if 'count' in enrollment_info:
             details['enrollment'] = enrollment_info['count']
             details['enrollment_type'] = enrollment_info.get('type', 'N/A')
+    if phases := design_module.get('phases'):
+        details['phase'] = ", ".join(phases) if phases else 'N/A'
 
-    for loc in protocol.get('contactsLocationsModule', {}).get('locations', []):
-        if loc.get('country') == country and loc.get('geoPoint'):
-            details['us_facilities'].append({
-                'facility': loc.get('facility', 'N/A'), 'city': loc.get('city', 'N/A'),
-                'state': loc.get('state', 'N/A'), 'zip': loc.get('zip', 'N/A'),
-                'latitude': loc.get('geoPoint', {}).get('lat'), 'longitude': loc.get('geoPoint', {}).get('lon')
-            })
+    contacts_locations_module = protocol.get('contactsLocationsModule', {})
+    if contacts_locations_module:
+        for loc in contacts_locations_module.get('locations', []):
+            if loc.get('country') == country and loc.get('geoPoint'):
+                details['us_facilities'].append({
+                    'facility': loc.get('facility', 'N/A'), 'city': loc.get('city', 'N/A'),
+                    'state': loc.get('state', 'N/A'), 'zip': loc.get('zip', 'N/A'),
+                    'latitude': loc.get('geoPoint', {}).get('lat'), 'longitude': loc.get('geoPoint', {}).get('lon')
+                })
+        for contact in contacts_locations_module.get('centralContacts', []):
+            details['central_contacts'].append({k: contact.get(k, '') for k in ['name', 'role', 'phone', 'email']})
+        for official in contacts_locations_module.get('overallOfficials', []):
+            details['overall_officials'].append({k: official.get(k, '') for k in ['name', 'affiliation', 'role']})
 
     if results_section := study_record.get('resultsSection', {}):
-        for measure in results_section.get('baselineCharacteristicsModule', {}).get('measures', []):
-            if measure.get('title') == "Race (NIH/OMB)":
-                for cat in measure.get('classes', [{}])[0].get('categories', []):
-                    if race_title := cat.get('title'):
-                        total_count = sum(int(m.get('value', 0)) for m in cat.get('measurements', []))
-                        details['race_data'][f"Race_{race_title.replace(' ', '_')}"] = total_count
+        if baseline_module := results_section.get('baselineCharacteristicsModule'):
+            for measure in baseline_module.get('measures', []):
+                if measure.get('title') == "Race (NIH/OMB)":
+                    for cat in measure.get('classes', [{}])[0].get('categories', []):
+                        if race_title := cat.get('title'):
+                            total_count = sum(int(m.get('value', 0)) for m in cat.get('measurements', []))
+                            details['race_data'][f"Race_{race_title.replace(' ', '_')}"] = total_count
     return details
 
 def process_raw_data(studies):
     """Processes raw JSON data into a clean DataFrame ready for geocoding."""
     print("[*] Processing raw study data...")
     all_facility_rows, all_race_keys = [], set()
-    for study in studies:
+    for study in tqdm(studies, desc="Processing studies"):
         nct_id = study.get('protocolSection', {}).get('identificationModule', {}).get('nctId', 'N/A')
         details = extract_study_details(study, COUNTRY_TO_ISOLATE)
         if not details['us_facilities']: continue
-        
+
         all_race_keys.update(details['race_data'].keys())
         inclusion_sentences = [s['sentence'] for s in parse_eligibility_criteria(study, SEARCH_KEYWORD) if not s['is_exclusion']]
         if not inclusion_sentences: continue
-        
+
         score_data = extract_and_standardize_scores(inclusion_sentences[0])
         if score_data['extracted_score'] == 'Not a Skin Type Score': continue
-            
+
         for facility in details['us_facilities']:
-            row = {'nctId': nct_id, 'status': details['status'], 'enrollment': details['enrollment'], 'enrollment_type': details['enrollment_type'], 'last_update_year': details['last_update_year']}
+            row = {
+                'nctId': nct_id, 'status': details['status'],
+                'enrollment': details['enrollment'], 'enrollment_type': details['enrollment_type'],
+                'last_update_year': details['last_update_year'], 'phase': details['phase'],
+                'central_contacts': details['central_contacts'],
+                'overall_officials': details['overall_officials']
+            }
             row.update(score_data)
             row.update(facility)
             row.update(details['race_data'])
             all_facility_rows.append(row)
-    
+
     if not all_facility_rows:
         print("[!] No processable US-based facilities found.")
         return pd.DataFrame()
@@ -192,18 +225,17 @@ def process_raw_data(studies):
     for race_col in all_race_keys:
         if race_col not in df.columns: df[race_col] = 0
     df.fillna(0, inplace=True)
-    
+
     skin_type_cols = [f'Type_{r}' for r in ['I', 'II', 'III', 'IV', 'V', 'VI']]
     unparsed_mask = df[skin_type_cols].sum(axis=1) == 0
     if not df[~unparsed_mask].empty:
         print(f"[*] Dropping {unparsed_mask.sum()} records with no specific Fitzpatrick scores.")
         df = df[~unparsed_mask].copy()
-    
+
     print(f"[*] Processed data into {len(df)} facility-level records.")
     return df
 
 # --- 3. Google Maps Places API Geocoding ---
-
 def geocode_locations_with_places_api(df_to_geocode):
     """
     Enriches a DataFrame with coordinates and place names using Google Places API.
@@ -214,16 +246,16 @@ def geocode_locations_with_places_api(df_to_geocode):
     if not API_KEY:
         raise ValueError("Google Maps API key not found in .env file.")
     gmaps = googlemaps.Client(key=API_KEY)
-    
+
     df = df_to_geocode.copy()
-    
+
     print("\n[*] Preparing search queries for Google Places API...")
     for col in ['facility', 'city', 'state', 'zip']:
         df[col] = df[col].astype(str)
 
     ends_with_site = df['facility'].str.lower().str.endswith('site', na=False)
     ends_with_number = df['facility'].str.contains(r'\d+$', regex=True, na=False)
-    
+
     fatal_flaw = (
         df['facility'].isin(['N/A', 'nan']) |
         df['facility'].str.startswith('Call Suneva', na=False) |
@@ -232,17 +264,15 @@ def geocode_locations_with_places_api(df_to_geocode):
         ends_with_number
     )
     bad_zip = df['zip'].isin(['N/A', 'nan'])
-    
+
     df['search_query'] = 'SKIP'
     workable_rows = ~fatal_flaw
-    
-    # Rows with good zip codes
+
     good_zip_rows = workable_rows & ~bad_zip
     df.loc[good_zip_rows, 'search_query'] = (
         df.loc[good_zip_rows, 'facility'] + ', ' + df.loc[good_zip_rows, 'city'] + ', ' +
         df.loc[good_zip_rows, 'state'] + ' ' + df.loc[good_zip_rows, 'zip']
     )
-    # Rows with missing zip codes but otherwise good info
     missing_zip_rows = workable_rows & bad_zip
     df.loc[missing_zip_rows, 'search_query'] = (
         df.loc[missing_zip_rows, 'facility'] + ', ' + df.loc[missing_zip_rows, 'city'] + ', ' + df.loc[missing_zip_rows, 'state']
@@ -250,8 +280,8 @@ def geocode_locations_with_places_api(df_to_geocode):
 
     rows_to_process = df[df['search_query'] != 'SKIP']
     print(f"[*] Found {len(rows_to_process)} rows to geocode ({len(df) - len(rows_to_process)} rows will be skipped).")
-    
-    df['place_name'] = '' # Add new column for Google's official place name
+
+    df['place_name'] = ''
     query_cache = {}
 
     for index, row in tqdm(rows_to_process.iterrows(), total=len(rows_to_process), desc="Geocoding with Places API"):
@@ -260,7 +290,6 @@ def geocode_locations_with_places_api(df_to_geocode):
             result = query_cache[query]
         else:
             try:
-                # Use Places API Text Search, requesting specific fields for efficiency
                 result = gmaps.places(query=query)
                 query_cache[query] = result
                 time.sleep(0.02)
@@ -268,7 +297,7 @@ def geocode_locations_with_places_api(df_to_geocode):
                 print(f"\n[!] API Error for query '{query}': {e}")
                 query_cache[query] = None
                 continue
-        
+
         if result and result.get('results'):
             place = result['results'][0]
             location = place.get('geometry', {}).get('location', {})
@@ -277,7 +306,7 @@ def geocode_locations_with_places_api(df_to_geocode):
             df.loc[index, 'place_name'] = place.get('name')
         else:
             df.loc[index, 'place_name'] = 'NO_RESULTS_FOUND'
-            
+
     return df
 
 # --- 4. Interactive Map Generation ---
@@ -293,7 +322,6 @@ def create_interactive_map_with_sidebar(map_data, filename):
     m = folium.Map(location=us_center, zoom_start=4, tiles="cartodbpositron")
     HeatMap([]).add_to(m)
 
-    # --- Prepare data for map layers ---
     locations_data = defaultdict(list)
     for rec in map_data:
         if pd.notna(rec.get('latitude')) and pd.notna(rec.get('longitude')):
@@ -304,19 +332,22 @@ def create_interactive_map_with_sidebar(map_data, filename):
     for loc_key, studies_at_loc in locations_data.items():
         lat, lon = map(float, loc_key.split(','))
         count = len(studies_at_loc)
-        weight = math.log1p(count) 
+        weight = math.log1p(count)
         heatmap_data.append([lat, lon, weight])
-        
+
     heatmap_gradient = {0.4:'blue', 0.6:'lime', 0.8:'yellow', 1.0:'red'}
 
-    # --- Prepare data for sidebar filters ---
     all_race_columns = sorted([col for col in map_data[0].keys() if str(col).startswith('Race_')]) if map_data else []
     enrollment_values = [r.get('enrollment') for r in map_data if isinstance(r.get('enrollment'), (int, float)) and r.get('enrollment', 0) > 0]
     max_enrollment = max(enrollment_values) if enrollment_values else 1000
     year_values = [int(r['last_update_year']) for r in map_data if str(r.get('last_update_year')).isdigit()]
     min_year, max_year = (min(year_values), max(year_values)) if year_values else (2000, 2025)
     all_statuses = sorted(set(r.get('status', 'N/A') for r in map_data))
+    all_phases_raw = sorted(list(set(str(r.get('phase', 'N/A')) for r in map_data)))
+
     status_display_map = {'ACTIVE_NOT_RECRUITING': 'Active, not recruiting', 'COMPLETED': 'Completed', 'ENROLLING_BY_INVITATION': 'Enrolling by invitation', 'NOT_YET_RECRUITING': 'Not yet recruiting', 'RECRUITING': 'Recruiting', 'SUSPENDED': 'Suspended', 'TERMINATED': 'Terminated', 'WITHDRAWN': 'Withdrawn', 'AVAILABLE': 'Available', 'NO_LONGER_AVAILABLE': 'No longer available', 'TEMPORARILY_NOT_AVAILABLE': 'Temporarily not available', 'APPROVED_FOR_MARKETING': 'Approved for marketing', 'WITHHELD': 'Withheld', 'UNKNOWN': 'Unknown status', 'N/A': 'N/A' }
+    phase_display_map = {'NA': 'Not Applicable', 'EARLY_PHASE1': 'Early Phase 1', 'PHASE1': 'Phase 1', 'PHASE2': 'Phase 2', 'PHASE3': 'Phase 3', 'PHASE4': 'Phase 4', 'N/A': 'N/A'}
+
     total_studies = len(set(rec.get('nctId') for rec in map_data))
     total_locations = len(locations_data)
     race_data = {}
@@ -324,16 +355,15 @@ def create_interactive_map_with_sidebar(map_data, filename):
         values = [r.get(col, 0) for r in map_data if isinstance(r.get(col), (int, float)) and r.get(col, 0) > 0]
         if values: race_data[col] = {'min': 0, 'max': int(max(values)), 'display_name': str(col).replace('Race_', '').replace('_', ' ')}
 
-    # --- HTML and Sidebar ---
-    css_rules = """ body { margin:0; padding:0; font-family:'Segoe UI',sans-serif; } .sidebar { position:fixed; top:0; left:0; width:320px; height:100vh; background:linear-gradient(135deg,#667eea 0%,#764ba2 100%); color:white; padding:20px; box-sizing:border-box; z-index:1001; overflow-y:auto; box-shadow:2px 0 10px rgba(0,0,0,0.2); } .sidebar h2 { margin:0 0 20px 0; font-size:24px; font-weight:300; border-bottom:2px solid rgba(255,255,255,0.3); padding-bottom:10px; } .filter-section { margin-bottom:20px; background:rgba(255,255,255,0.1); padding:15px; border-radius:8px; } .skin-type-item { display:flex; align-items:center; margin:8px 0; padding:8px; border-radius:6px; transition:background 0.3s; cursor:pointer; user-select:none; background:rgba(0,0,0,0.2); } .skin-type-item.active { background:rgba(255,255,255,0.3); } .color-indicator { width:18px; height:18px; border-radius:50%; margin-right:12px; border:2px solid white; } .slider { width:100%; -webkit-appearance:none; appearance:none; height:6px; border-radius:3px; background:rgba(255,255,255,0.3); outline:none; } .slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:18px; height:18px; border-radius:50%; background:#ffd700; cursor:pointer; } .slider-value { font-size:12px; color:#ffd700; text-align:center; margin-top:5px; font-weight:bold; } .reset-btn { width:100%; padding:10px; background:rgba(255,255,255,0.2); color:white; border:none; border-radius:6px; cursor:pointer; font-size:14px; margin-top:10px; } .checkbox-group, .radio-group { display:flex; flex-direction:column; gap:8px; margin-top:10px; } .checkbox-item, .radio-item { display:flex; align-items:center; cursor:pointer; padding:6px 8px; border-radius:4px; background:rgba(0,0,0,0.2); transition:background 0.2s; } .checkbox-item:hover, .radio-item:hover { background:rgba(255,255,255,0.1); } .checkbox-item input, .radio-item input { margin-right:8px; cursor:pointer; } .checkbox-item label, .radio-item label { cursor:pointer; font-size:13px; flex:1; } .folium-map { position:absolute; top:0; left:320px; right:0; bottom:0; z-index:1000; } .filter-summary { background:rgba(0,0,0,0.2); padding:10px; border-radius:6px; margin-bottom:15px; font-size:13px; } .filter-summary div:not(:last-child) { margin-bottom:4px; } .race-filter { margin-bottom:10px; } .race-filter label { display:block; margin-bottom:5px; font-size:13px; } """
+    css_rules = """ body { margin:0; padding:0; font-family:'Segoe UI',sans-serif; } .sidebar { position:fixed; top:0; left:0; width:350px; height:100vh; background:linear-gradient(135deg,#667eea 0%,#764ba2 100%); color:white; padding:20px; box-sizing:border-box; z-index:1001; overflow-y:auto; box-shadow:2px 0 10px rgba(0,0,0,0.2); } .sidebar h2 { margin:0 0 20px 0; font-size:24px; font-weight:300; border-bottom:2px solid rgba(255,255,255,0.3); padding-bottom:10px; } .filter-section { margin-bottom:20px; background:rgba(255,255,255,0.1); padding:15px; border-radius:8px; } .skin-type-item { display:flex; align-items:center; margin:8px 0; padding:8px; border-radius:6px; transition:background 0.3s; cursor:pointer; user-select:none; background:rgba(0,0,0,0.2); } .skin-type-item.active { background:rgba(255,255,255,0.3); } .color-indicator { width:18px; height:18px; border-radius:50%; margin-right:12px; border:2px solid white; } .slider { width:100%; -webkit-appearance:none; appearance:none; height:6px; border-radius:3px; background:rgba(255,255,255,0.3); outline:none; } .slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:18px; height:18px; border-radius:50%; background:#ffd700; cursor:pointer; } .slider-value { font-size:12px; color:#ffd700; text-align:center; margin-top:5px; font-weight:bold; } .reset-btn { width:100%; padding:10px; background:rgba(255,255,255,0.2); color:white; border:none; border-radius:6px; cursor:pointer; font-size:14px; margin-top:10px; } .checkbox-group, .radio-group { display:flex; flex-direction:column; gap:8px; margin-top:10px; } .checkbox-item, .radio-item { display:flex; align-items:center; cursor:pointer; padding:6px 8px; border-radius:4px; background:rgba(0,0,0,0.2); transition:background 0.2s; } .checkbox-item:hover, .radio-item:hover { background:rgba(255,255,255,0.1); } .checkbox-item input, .radio-item input { margin-right:8px; cursor:pointer; } .checkbox-item label, .radio-item label { cursor:pointer; font-size:13px; flex:1; } .folium-map { position:absolute; top:0; left:350px; right:0; bottom:0; z-index:1000; } .filter-summary { background:rgba(0,0,0,0.2); padding:10px; border-radius:6px; margin-bottom:15px; font-size:13px; } .filter-summary div:not(:last-child) { margin-bottom:4px; } """
     type_colors = {'I':'#FFE5E5','II':'#FFB3B3','III':'#FF8080','IV':'#CC6600','V':'#8B4513','VI':'#654321'}
     skin_type_html = ''.join([f'<div class="skin-type-item active" data-type="{st}" onclick="this.classList.toggle(\'active\');updateFilters();"><div class="color-indicator" style="background-color:{c};"></div><span>Type {st}</span></div>' for st,c in type_colors.items()])
     race_filter_html = ''.join([f'<div class="race-filter"><label for="{rc.lower()}">{d["display_name"]}:</label><input type="range" id="{rc.lower()}" class="slider" min="0" max="{d["max"]}" value="0" oninput="updateFilters()"><div class="slider-value" id="{rc.lower()}-value">0+</div></div>' for rc,d in race_data.items()])
     status_checkboxes = ''.join([f'<div class="checkbox-item"><input type="checkbox" id="status-{s.lower()}" checked onchange="updateFilters()"><label for="status-{s.lower()}">{status_display_map.get(s,s)}</label></div>' for s in all_statuses])
+    phase_checkboxes = ''.join([f'<div class="checkbox-item"><input type="checkbox" id="phase-{re.sub(r"[ ,]+", "-", p.lower())}" value="{p}" checked onchange="updateFilters()"><label for="phase-{re.sub(r"[ ,]+", "-", p.lower())}">{phase_display_map.get(p, p)}</label></div>' for p in all_phases_raw])
     viz_switcher_html = """<div class="filter-section"><h3>Visualization Type</h3><div class="radio-group"><div class="radio-item"><input type="radio" id="viz-dots" name="viz-type" value="dots" checked onchange="updateVisualization()"><label for="viz-dots">Individual Locations (Dots)</label></div><div class="radio-item"><input type="radio" id="viz-heatmap" name="viz-type" value="heatmap" onchange="updateVisualization()"><label for="viz-heatmap">Density (Heatmap)</label></div></div></div>"""
-    sidebar_html = f""" <div class="sidebar"> <h2>US Fitzpatrick Trials</h2> <div class="filter-summary"> <div><strong>Studies:</strong> <span id="visible-studies-count">{total_studies}</span> of {total_studies}</div> <div><strong>Locations:</strong> <span id="visible-locations-count">{total_locations}</span> of {total_locations}</div> </div> {viz_switcher_html} <div class="filter-section"><h3>Fitzpatrick Skin Types</h3>{skin_type_html}</div> <div class="filter-section"> <h3>Enrollment</h3> <div class="control-group"><label for="min-enrollment">Minimum Enrollment:</label><input type="range" id="min-enrollment" class="slider" min="0" max="{max_enrollment}" value="0" oninput="updateFilters()"><div class="slider-value" id="min-enrollment-value">0+</div></div> <div class="control-group" style="margin-top:15px;"><label style="display:block;margin-bottom:8px;">Enrollment Type:</label><div class="checkbox-group"><div class="checkbox-item"><input type="checkbox" id="enrollment-actual" checked onchange="updateFilters()"><label for="enrollment-actual">Actual</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-estimated" checked onchange="updateFilters()"><label for="enrollment-estimated">Estimated</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-na" checked onchange="updateFilters()"><label for="enrollment-na">N/A</label></div></div></div> </div> <div class="filter-section"><h3>Study Status</h3><div class="checkbox-group">{status_checkboxes}</div></div> <div class="filter-section"> <h3>Last Updated Year</h3> <div class="control-group"><label for="year-range">Minimum Year:</label><input type="range" id="year-range" class="slider" min="{min_year}" max="{max_year}" value="{min_year}" oninput="updateFilters()"><div class="slider-value" id="year-range-value">{min_year}+</div></div> </div> <div class="filter-section"><h3>Race Demographics</h3>{race_filter_html}</div> <div class="filter-section"><button class="reset-btn" onclick="resetAllFilters()">Reset All Filters</button></div> </div> """
+    sidebar_html = f""" <div class="sidebar"> <h2>US Fitzpatrick Trials</h2> <div class="filter-summary"> <div><strong>Studies:</strong> <span id="visible-studies-count">{total_studies}</span> of {total_studies}</div> <div><strong>Locations:</strong> <span id="visible-locations-count">{total_locations}</span> of {total_locations}</div> </div> {viz_switcher_html} <div class="filter-section"><h3>Fitzpatrick Skin Types</h3>{skin_type_html}</div> <div class="filter-section"> <h3>Enrollment</h3> <div class="control-group"><label for="min-enrollment">Minimum Enrollment:</label><input type="range" id="min-enrollment" class="slider" min="0" max="{max_enrollment}" value="0" oninput="updateFilters()"><div class="slider-value" id="min-enrollment-value">0+</div></div> <div class="control-group" style="margin-top:15px;"><label style="display:block;margin-bottom:8px;">Enrollment Type:</label><div class="checkbox-group"><div class="checkbox-item"><input type="checkbox" id="enrollment-actual" checked onchange="updateFilters()"><label for="enrollment-actual">Actual</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-estimated" checked onchange="updateFilters()"><label for="enrollment-estimated">Estimated</label></div><div class="checkbox-item"><input type="checkbox" id="enrollment-na" checked onchange="updateFilters()"><label for="enrollment-na">N/A</label></div></div></div> </div> <div class="filter-section"><h3>Study Status</h3><div class="checkbox-group">{status_checkboxes}</div></div><div class="filter-section"><h3>Study Phase</h3><div class="checkbox-group">{phase_checkboxes}</div></div> <div class="filter-section"> <h3>Last Updated Year</h3> <div class="control-group"><label for="year-range">Minimum Year:</label><input type="range" id="year-range" class="slider" min="{min_year}" max="{max_year}" value="{min_year}" oninput="updateFilters()"><div class="slider-value" id="year-range-value">{min_year}+</div></div> </div> <div class="filter-section"><h3>Race Demographics</h3>{race_filter_html}</div> <div class="filter-section"><button class="reset-btn" onclick="resetAllFilters()">Reset All Filters</button></div></div> """
 
-    # --- UPDATED JavaScript ---
     javascript_code = """
         let mapInstance, markersLayer, heatmapLayer;
         const locationsData = {locations_data_json};
@@ -342,7 +372,9 @@ def create_interactive_map_with_sidebar(map_data, filename):
         const allRaceColumns = {all_race_columns_json};
         const raceDataInfo = {race_data_info_json};
         const allStatuses = {all_statuses_json};
+        const allPhases = {all_phases_json};
         const statusDisplayMap = {status_display_map_json};
+        const phaseDisplayMap = {phase_display_map_json};
         const minYear = {min_year};
 
         function findMapInstance() {{ return window[document.querySelector('.folium-map').id]; }}
@@ -362,13 +394,13 @@ def create_interactive_map_with_sidebar(map_data, filename):
             if (vizType === 'dots') {{
                 if (mapInstance.hasLayer(heatmapLayer)) mapInstance.removeLayer(heatmapLayer);
                 if (!mapInstance.hasLayer(markersLayer)) mapInstance.addLayer(markersLayer);
-            }} else {{ // heatmap
+            }} else {{
                 if (mapInstance.hasLayer(markersLayer)) mapInstance.removeLayer(markersLayer);
                 if (!mapInstance.hasLayer(heatmapLayer)) mapInstance.addLayer(heatmapLayer);
             }}
         }};
 
-        function passesFilters(record, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter) {{
+        function passesFilters(record, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter, activePhases) {{
             if (!activeTypes.some(type => record[`Type_${{type}}`] === 1)) return false;
             const recordYear = parseInt(record.last_update_year);
             if (!isNaN(recordYear) && recordYear < yearFilter) return false;
@@ -376,19 +408,16 @@ def create_interactive_map_with_sidebar(map_data, filename):
             if (enrollment < enrollmentFilter) return false;
             if (!enrollmentTypes.includes((record.enrollment_type || 'N/A').toUpperCase())) return false;
             if (!statusTypes.includes(record.status || 'N/A')) return false;
+            if (!activePhases.includes(record.phase || 'N/A')) return false;
             for (const [raceCol, minVal] of Object.entries(raceFilters)) {{
                 if ((record[raceCol] || 0) < minVal) return false;
             }}
             return true;
         }}
 
-        // ==========================================================
-        // ===== THIS ENTIRE FUNCTION HAS BEEN UPDATED =============
-        // ==========================================================
         window.updateFilters = function() {{
             if (!mapInstance || !markersLayer) return;
 
-            // 1. Get all current filter values from the sidebar
             const activeTypes = Array.from(document.querySelectorAll('.skin-type-item.active')).map(el => el.dataset.type);
             const enrollmentFilter = parseInt(document.getElementById('min-enrollment').value);
             document.getElementById('min-enrollment-value').textContent = enrollmentFilter + '+';
@@ -399,6 +428,8 @@ def create_interactive_map_with_sidebar(map_data, filename):
             if (document.getElementById('enrollment-estimated').checked) enrollmentTypes.push('ESTIMATED');
             if (document.getElementById('enrollment-na').checked) enrollmentTypes.push('N/A');
             const statusTypes = allStatuses.filter(status => document.getElementById(`status-${{status.toLowerCase()}}`)?.checked);
+            const activePhases = Array.from(document.querySelectorAll('input[id^="phase-"]:checked')).map(cb => cb.value);
+            
             const raceFilters = {{}};
             for (const raceCol in raceDataInfo) {{
                 const elId = raceCol.toLowerCase();
@@ -410,23 +441,20 @@ def create_interactive_map_with_sidebar(map_data, filename):
                 }}
             }}
 
-            // 2. Prepare for rebuilding layers
             markersLayer.clearLayers();
             let visibleLocations = 0;
             const visibleStudies = new Set();
-            const newHeatmapData = []; // <-- Key change: Create new array for filtered heatmap data
+            const newHeatmapData = [];
 
-            // 3. Loop through all locations and apply filters once
             for (const [locKey, studiesAtLoc] of Object.entries(locationsData)) {{
-                const passingStudies = studiesAtLoc.filter(study => passesFilters(study, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter));
+                const passingStudies = studiesAtLoc.filter(study => passesFilters(study, enrollmentFilter, enrollmentTypes, statusTypes, raceFilters, activeTypes, yearFilter, activePhases));
                 
                 if (passingStudies.length > 0) {{
                     visibleLocations++;
                     passingStudies.forEach(study => visibleStudies.add(study.nctId));
                     const [lat, lon] = locKey.split(',').map(Number);
                     
-                    // --- A. Rebuild the MARKERS as before ---
-                    let popupHtml = '<div style="font-family: Arial, sans-serif; max-height: 300px; overflow-y: auto; min-width: 350px;">';
+                    let popupHtml = '<div style="font-family: Arial, sans-serif; max-height: 400px; overflow-y: auto; min-width: 450px; padding-right:15px;">';
                     passingStudies.forEach((study, i) => {{
                         let raceHtml = "";
                         allRaceColumns.forEach(raceCol => {{
@@ -434,47 +462,75 @@ def create_interactive_map_with_sidebar(map_data, filename):
                             if (count > 0) raceHtml += `<li>${{raceDataInfo[raceCol]?.display_name || raceCol}}: <strong>${{count}}</strong></li>`;
                         }});
                         if (raceHtml) raceHtml = `<p style="margin:5px 0 3px;"><strong>Demographics:</strong></p><ul style="margin:0;padding-left:20px;">${{raceHtml}}</ul>`;
+                        
+                        let contactsHtml = '';
+                        const centralContacts = study.central_contacts;
+                        const overallOfficials = study.overall_officials;
+                        if ((centralContacts && centralContacts.length > 0) || (overallOfficials && overallOfficials.length > 0)) {{
+                            contactsHtml += '<div style="margin-top:10px;"><strong style="font-size:1.1em;">Officials & Contacts</strong>';
+                            if (overallOfficials && overallOfficials.length > 0) {{
+                                contactsHtml += '<ul style="margin:5px 0; padding-left:20px; list-style-type:disc;">';
+                                overallOfficials.forEach(c => {{
+                                    contactsHtml += `<li><strong>${{c.name || 'N/A'}}</strong> (${{(c.role || '').replace(/_/g, ' ')}}), <em>${{c.affiliation || 'N/A'}}</em></li>`;
+                                }});
+                                contactsHtml += '</ul>';
+                            }}
+                            if (centralContacts && centralContacts.length > 0) {{
+                                contactsHtml += '<ul style="margin:5px 0; padding-left:20px; list-style-type:disc;">';
+                                centralContacts.forEach(c => {{
+                                    let contactInfo = c.email ? `<a href="mailto:${{c.email}}">${{c.email}}</a>` : '';
+                                    if (c.phone) contactInfo += (contactInfo ? ` / ${{c.phone}}` : c.phone);
+                                    contactsHtml += `<li><strong>${{c.name || 'N/A'}}</strong> (${{c.role}}): ${{contactInfo || 'No contact info'}}</li>`;
+                                }});
+                                contactsHtml += '</ul>';
+                            }}
+                            contactsHtml += '</div>';
+                        }}
+
                         const enrollmentDisplay = study.enrollment !== 'N/A' && study.enrollment_type !== 'N/A' ? `${{study.enrollment}} (${{study.enrollment_type}})` : (study.enrollment || 'N/A');
                         const statusDisplay = statusDisplayMap[study.status] || study.status;
+                        const phaseDisplay = phaseDisplayMap[study.phase] || study.phase;
                         const includedSkinTypes = ['I', 'II', 'III', 'IV', 'V', 'VI'].filter(roman => study[`Type_${{roman}}`] === 1);
                         const skinTypeDisplay = includedSkinTypes.length > 0 ? includedSkinTypes.join(', ') : 'Not Specified';
                         const lastUpdateYearDisplay = study.last_update_year || 'N/A';
-                        popupHtml += `<div style="border-top: ${{i > 0 ? '1px solid #ccc' : 'none'}}; padding: 10px 5px;"><h4 style="margin:0 0 10px 0;">Study Details</h4><p><strong>NCT ID:</strong> <a href="https://clinicaltrials.gov/study/${{study.nctId}}" target="_blank">${{study.nctId}}</a></p><p><strong>Status:</strong> ${{statusDisplay}}</p><p><strong>Last Updated:</strong> ${{lastUpdateYearDisplay}}</p><p><strong>Enrollment:</strong> <strong>${{enrollmentDisplay}}</strong></p><p><strong>Facility:</strong> ${{study.facility}}</p><p><strong>Skin Types:</strong> ${{skinTypeDisplay}}</p>${{raceHtml}}</div>`;
+                        popupHtml += `<div style="border-top: ${{i > 0 ? '1px solid #ccc' : 'none'}}; padding: 10px 5px;"><h4 style="margin:0 0 10px 0;">Study <a href="https://clinicaltrials.gov/study/${{study.nctId}}" target="_blank">${{study.nctId}}</a></h4><p style="margin:4px 0;"><strong>Facility:</strong> ${{study.facility}}</p><p style="margin:4px 0;"><strong>Status:</strong> ${{statusDisplay}}</p><p style="margin:4px 0;"><strong>Phase:</strong> ${{phaseDisplay}}</p><p style="margin:4px 0;"><strong>Skin Types:</strong> ${{skinTypeDisplay}}</p><p style="margin:4px 0;"><strong>Enrollment:</strong> <strong>${{enrollmentDisplay}}</strong></p><p style="margin:4px 0;"><strong>Last Updated:</strong> ${{lastUpdateYearDisplay}}</p>${{raceHtml}}${{contactsHtml}}</div>`;
                     }});
                     popupHtml += '</div>';
+
                     const firstStudy = passingStudies[0];
                     const isPrecise = firstStudy.place_name && firstStudy.place_name !== 'NO_RESULTS_FOUND';
                     const tooltipPrefix = isPrecise ? '[Facility]' : '[City]';
                     const tooltipName = isPrecise ? firstStudy.place_name : firstStudy.city;
                     L.circleMarker([lat, lon], {{ radius: 6 + Math.sqrt(passingStudies.length), color: '#ffffff', weight: 2, fillColor: '#764ba2', fillOpacity: 0.8 }})
-                        .bindPopup(popupHtml, {{maxWidth: 400}})
+                        .bindPopup(popupHtml, {{maxWidth: 500}})
                         .bindTooltip(`${{tooltipPrefix}} ${{tooltipName}} (${{passingStudies.length}} studies)`)
                         .addTo(markersLayer);
 
-                    // --- B. Add a point to our NEW HEATMAP data ---
-                    const count = passingStudies.length;
-                    const weight = Math.log1p(count); // Using the same log scaling
+                    const weight = Math.log1p(passingStudies.length);
                     newHeatmapData.push([lat, lon, weight]);
                 }}
             }}
             
-            // 4. Update the UI counts and the heatmap layer
             document.getElementById('visible-locations-count').textContent = visibleLocations;
             document.getElementById('visible-studies-count').textContent = visibleStudies.size;
-            heatmapLayer.setLatLngs(newHeatmapData); // <-- Key change: Update the heatmap layer
+            heatmapLayer.setLatLngs(newHeatmapData);
         }};
 
         window.resetAllFilters = function() {{
             document.getElementById('viz-dots').checked = true;
             updateVisualization();
             document.querySelectorAll('.skin-type-item').forEach(item => item.classList.add('active'));
-            document.querySelectorAll('.slider').forEach(slider => slider.value = 0);
-            const yearSlider = document.getElementById('year-range');
-            if(yearSlider) yearSlider.value = minYear;
+            document.querySelectorAll('.slider').forEach(slider => {{
+                slider.value = slider.min;
+                // Manually trigger the 'oninput' event to update the value display
+                const event = new Event('input', {{ bubbles: true }});
+                slider.dispatchEvent(event);
+            }});
             document.getElementById('enrollment-actual').checked = true;
             document.getElementById('enrollment-estimated').checked = true;
             document.getElementById('enrollment-na').checked = true;
-            allStatuses.forEach(status => {{ const checkbox = document.getElementById(`status-${{status.toLowerCase()}}`); if (checkbox) checkbox.checked = true; }});
+            document.querySelectorAll('input[id^="status-"]').forEach(cb => cb.checked = true);
+            document.querySelectorAll('input[id^="phase-"]').forEach(cb => cb.checked = true);
             updateFilters();
         }};
     """.format(
@@ -484,7 +540,9 @@ def create_interactive_map_with_sidebar(map_data, filename):
         all_race_columns_json=json.dumps(all_race_columns),
         race_data_info_json=json.dumps(race_data),
         all_statuses_json=json.dumps(all_statuses),
+        all_phases_json=json.dumps(all_phases_raw),
         status_display_map_json=json.dumps(status_display_map),
+        phase_display_map_json=json.dumps(phase_display_map),
         min_year=min_year
     )
 
@@ -494,24 +552,50 @@ def create_interactive_map_with_sidebar(map_data, filename):
 
     m.save(filename)
     print(f"\n[*] Success! Interactive map saved to '{filename}'.")
+
 # --- 5. Main Orchestrator ---
 
 def main():
     """Main function to run the entire data processing and mapping pipeline."""
     if os.path.exists(FINAL_MASTER_CSV):
         print(f"[*] Final dataset '{FINAL_MASTER_CSV}' found. Skipping to map generation.")
-        df_final = pd.read_csv(FINAL_MASTER_CSV)
+        
+        def safe_literal_eval(val):
+            try:
+                return ast.literal_eval(val)
+            except (ValueError, SyntaxError, TypeError):
+                return []
+        
+        converters = {
+            'central_contacts': safe_literal_eval,
+            'overall_officials': safe_literal_eval
+        }
+        df_final = pd.read_csv(FINAL_MASTER_CSV, converters=converters)
+        df_final['phase'] = df_final['phase'].astype(str).replace('nan', 'N/A')
     else:
         print(f"[!] Final dataset not found. Starting full data pipeline...")
-        # Step 1: Fetch from API if raw JSON doesn't exist
-        if not os.path.exists(RAW_JSON_FILENAME):
-            fetch_clinical_trials_data(API_BASE_URL, SEARCH_KEYWORD, RAW_JSON_FILENAME)
+        # To ensure you get the latest data, delete the old JSON file
+        if os.path.exists(RAW_JSON_FILENAME):
+            print(f"[*] Deleting old raw data file: '{RAW_JSON_FILENAME}'")
+            os.remove(RAW_JSON_FILENAME)
         
-        # Step 2: Load and process the raw JSON data
+        fetch_clinical_trials_data(API_BASE_URL, SEARCH_KEYWORD, RAW_JSON_FILENAME)
+        
         try:
             with open(RAW_JSON_FILENAME, 'r', encoding='utf-8') as f:
                 studies = json.load(f).get('studies', [])
             print(f"[*] Loaded {len(studies)} studies from '{RAW_JSON_FILENAME}'.")
+            
+            # --- Optional Debugging Step ---
+            # Uncomment the following lines to inspect the first study's data
+            # if studies:
+            #     print("\n--- DEBUG: First Study Data ---")
+            #     first_study = studies[0].get('protocolSection', {})
+            #     print(f"Phase: {first_study.get('designModule', {}).get('phases')}")
+            #     print(f"Contacts: {first_study.get('contactsLocationsModule', {}).get('centralContacts')}")
+            #     print(f"Officials: {first_study.get('contactsLocationsModule', {}).get('overallOfficials')}")
+            #     print("-----------------------------\n")
+
         except (FileNotFoundError, json.JSONDecodeError) as e:
             print(f"[!] Error loading raw JSON file: {e}. Exiting.")
             return
@@ -521,25 +605,20 @@ def main():
             print("[!] No data to process after initial parsing. Exiting.")
             return
             
-        # Step 3: Geocode locations using Google Places API
         df_final = geocode_locations_with_places_api(df_processed)
         
-        # Step 4: Save the final master dataset
         try:
             os.makedirs(os.path.dirname(FINAL_MASTER_CSV), exist_ok=True)
             df_final.to_csv(FINAL_MASTER_CSV, index=False, encoding='utf-8')
-            print(f"\n[*] Success! Final master dataset saved to '{FINAL_MASTER_CSV}'.")
+            print(f"\n[*] Success! Finalf master dataset saved to '{FINAL_MASTER_CSV}'.")
         except IOError as e:
             print(f"[!] Error writing final CSV file: {e}")
             return
     
-    # Final Step: Create the interactive map
     if df_final.empty:
         print("[!] Final dataset is empty. Cannot create map.")
         return
         
-    # Convert DataFrame to list of dicts for the map function
-    # The map's JS expects camelCase keys, so we ensure columns match that format
     map_data = df_final.to_dict('records')
     create_interactive_map_with_sidebar(map_data, MAP_OUTPUT_HTML)
 

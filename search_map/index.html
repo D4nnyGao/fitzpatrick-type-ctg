@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clinical Trials Map Search</title>
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2>Clinical Trials Map 🗺️</h2>
+
+        <div class="filter-section" id="search-section">
+            <h3>Search Criteria</h3>
+            <form id="search-form">
+                <div class="form-group">
+                    <label for="keywords">Keywords</label>
+                    <input type="text" id="keywords" placeholder="e.g., fitzpatrick, melanoma" required>
+                </div>
+                <div class="form-group">
+                    <label for="search-area">Search In</label>
+                    <select id="search-area">
+                        <option value="general" selected>All Fields</option>
+                        <option value="eligibility">Eligibility Criteria</option>
+                        <option value="title">Official Title</option>
+                        <option value="summary">Brief Summary</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="country">Country</label>
+                    <input type="text" id="country" value="United States" required>
+                </div>
+                <button type="submit" id="search-button" class="search-btn">Search Trials</button>
+            </form>
+        </div>
+
+        <div id="loader" class="hidden">
+             <div class="spinner"></div>
+             <p>Fetching data from ClinicalTrials.gov...</p>
+        </div>
+        <div class="filter-summary hidden" id="results-summary"></div>
+
+        <div id="filters-container" class="hidden">
+            <div class="filter-section">
+                <h3>Visualization Type</h3>
+                <div class="radio-group">
+                    <div class="radio-item"><input type="radio" id="viz-dots" name="viz-type" value="dots" checked onchange="updateVisualization()"><label for="viz-dots">Individual Locations (Dots)</label></div>
+                    <div class="radio-item"><input type="radio" id="viz-heatmap" name="viz-type" value="heatmap" onchange="updateVisualization()"><label for="viz-heatmap">Density (Heatmap)</label></div>
+                </div>
+            </div>
+            <div class="filter-section">
+                <h3>Study Phase</h3>
+                <div class="checkbox-group" id="phase-group"></div>
+            </div>
+            <div class="filter-section">
+                <h3>Enrollment</h3>
+                <div class="control-group">
+                    <label for="min-enrollment">Minimum Enrollment:</label>
+                    <input type="range" id="min-enrollment" class="slider" min="0" max="1000" value="0" oninput="updateFilters()">
+                    <div class="slider-value" id="min-enrollment-value">0+</div>
+                </div>
+                <div class="control-group" style="margin-top:15px;">
+                    <label style="display:block;margin-bottom:8px;">Enrollment Type:</label>
+                    <div class="checkbox-group" id="enrollment-type-group"></div>
+                </div>
+            </div>
+            <div class="filter-section">
+                <h3>Study Status</h3>
+                <div class="checkbox-group" id="status-group"></div>
+            </div>
+            <div class="filter-section">
+                <h3>Last Updated Year</h3>
+                <div class="control-group">
+                    <label for="year-range">Minimum Year:</label>
+                    <input type="range" id="year-range" class="slider" min="2000" max="2025" value="2000" oninput="updateFilters()">
+                    <div class="slider-value" id="year-range-value">2000+</div>
+                </div>
+            </div>
+            <div class="filter-section">
+                <button class="reset-btn" onclick="resetAllFilters()">Reset All Filters</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="folium-map" id="map"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/python-visualization/folium@main/folium/templates/leaflet_heat.min.js"></script>
+    
+    <script src="script.js"></script>
+</body>
+</html>
